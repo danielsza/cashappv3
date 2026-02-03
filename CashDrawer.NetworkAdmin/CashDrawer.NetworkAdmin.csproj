@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <AssemblyName>CashDrawer.NetworkAdmin</AssemblyName>
+    <RootNamespace>CashDrawer.NetworkAdmin</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\CashDrawer.Shared\CashDrawer.Shared.csproj" />
+  </ItemGroup>
+</Project>

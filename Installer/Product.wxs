@@ -1,0 +1,354 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi"
+     xmlns:util="http://schemas.microsoft.com/wix/UtilExtension">
+  
+  <?define ProductName = "Cash Drawer Management System" ?>
+  <?define ProductVersion = "3.10.22.0" ?>
+  <?define Manufacturer = "Daniel Szajkowski" ?>
+  <?define UpgradeCode = "12345678-1234-1234-1234-123456789ABC" ?>
+  
+  <Product Id="*" 
+           Name="$(var.ProductName)" 
+           Language="1033" 
+           Version="$(var.ProductVersion)" 
+           Manufacturer="$(var.Manufacturer)" 
+           UpgradeCode="$(var.UpgradeCode)">
+    
+    <Package InstallerVersion="500" 
+             Compressed="yes" 
+             InstallScope="perMachine"
+             Description="Cash Drawer Management System Installer"
+             Comments="Copyright © 2026 Daniel Szajkowski. All rights reserved."
+             Manufacturer="$(var.Manufacturer)" />
+
+    <MajorUpgrade DowngradeErrorMessage="A newer version of [ProductName] is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <!-- Custom UI for configuration -->
+    <UI>
+      <UIRef Id="WixUI_FeatureTree" />
+      <UIRef Id="WixUI_ErrorProgressText" />
+      
+      <Publish Dialog="CustomizeDlg" Control="Next" Event="NewDialog" Value="ServerConfigDlg">1</Publish>
+    </UI>
+
+    <!-- Custom dialog for server configuration -->
+    <UI>
+      <Dialog Id="ServerConfigDlg" Width="370" Height="270" Title="Server Configuration">
+        <Control Id="Title" Type="Text" X="15" Y="6" Width="200" Height="15" Transparent="yes" NoPrefix="yes">
+          <Text>{\WixUI_Font_Title}Server Configuration</Text>
+        </Control>
+        
+        <Control Id="ServerIdLabel" Type="Text" X="20" Y="60" Width="100" Height="17" TabSkip="no" Text="Server ID:" />
+        <Control Id="ServerIdEdit" Type="Edit" X="130" Y="58" Width="150" Height="18" Property="SERVER_ID" />
+        
+        <Control Id="ComPortLabel" Type="Text" X="20" Y="85" Width="100" Height="17" TabSkip="no" Text="COM Port:" />
+        <Control Id="ComPortEdit" Type="Edit" X="130" Y="83" Width="150" Height="18" Property="COM_PORT" />
+        
+        <Control Id="RelayTypeLabel" Type="Text" X="20" Y="110" Width="100" Height="17" TabSkip="no" Text="Relay Type:" />
+        <Control Id="RelayTypeCombo" Type="ComboBox" X="130" Y="108" Width="150" Height="18" Property="RELAY_TYPE" ComboList="yes">
+          <ComboBox Property="RELAY_TYPE">
+            <ListItem Text="Commands" Value="Commands" />
+            <ListItem Text="APR402" Value="APR402" />
+            <ListItem Text="K8090" Value="K8090" />
+          </ComboBox>
+        </Control>
+        
+        <Control Id="TestModeLabel" Type="Text" X="20" Y="135" Width="100" Height="17" TabSkip="no" Text="Test Mode:" />
+        <Control Id="TestModeCheckbox" Type="CheckBox" X="130" Y="133" Width="150" Height="18" Property="TEST_MODE" CheckBoxValue="1" />
+        
+        <Control Id="Back" Type="PushButton" X="180" Y="243" Width="56" Height="17" Text="&amp;Back">
+          <Publish Event="NewDialog" Value="CustomizeDlg">1</Publish>
+        </Control>
+        <Control Id="Next" Type="PushButton" X="236" Y="243" Width="56" Height="17" Default="yes" Text="&amp;Next">
+          <Publish Event="NewDialog" Value="EmailConfigDlg">1</Publish>
+        </Control>
+        <Control Id="Cancel" Type="PushButton" X="304" Y="243" Width="56" Height="17" Cancel="yes" Text="Cancel">
+          <Publish Event="SpawnDialog" Value="CancelDlg">1</Publish>
+        </Control>
+      </Dialog>
+    </UI>
+
+    <!-- Email configuration dialog -->
+    <UI>
+      <Dialog Id="EmailConfigDlg" Width="370" Height="320" Title="Email Configuration">
+        <Control Id="Title" Type="Text" X="15" Y="6" Width="200" Height="15" Transparent="yes" NoPrefix="yes">
+          <Text>{\WixUI_Font_Title}Email Notifications</Text>
+        </Control>
+        
+        <Control Id="EnableEmailLabel" Type="Text" X="20" Y="60" Width="100" Height="17" TabSkip="no" Text="Enable Email:" />
+        <Control Id="EnableEmailCheckbox" Type="CheckBox" X="130" Y="58" Width="150" Height="18" Property="EMAIL_ENABLED" CheckBoxValue="1" />
+        
+        <Control Id="SmtpServerLabel" Type="Text" X="20" Y="85" Width="100" Height="17" TabSkip="no" Text="SMTP Server:" />
+        <Control Id="SmtpServerEdit" Type="Edit" X="130" Y="83" Width="150" Height="18" Property="SMTP_SERVER" />
+        
+        <Control Id="SmtpPortLabel" Type="Text" X="20" Y="110" Width="100" Height="17" TabSkip="no" Text="SMTP Port:" />
+        <Control Id="SmtpPortEdit" Type="Edit" X="130" Y="108" Width="150" Height="18" Property="SMTP_PORT" />
+        
+        <Control Id="SmtpUsernameLabel" Type="Text" X="20" Y="135" Width="100" Height="17" TabSkip="no" Text="Username:" />
+        <Control Id="SmtpUsernameEdit" Type="Edit" X="130" Y="133" Width="150" Height="18" Property="SMTP_USERNAME" />
+        
+        <Control Id="SmtpPasswordLabel" Type="Text" X="20" Y="160" Width="100" Height="17" TabSkip="no" Text="Password:" />
+        <Control Id="SmtpPasswordEdit" Type="Edit" X="130" Y="158" Width="150" Height="18" Property="SMTP_PASSWORD" Password="yes" />
+        
+        <Control Id="FromEmailLabel" Type="Text" X="20" Y="185" Width="100" Height="17" TabSkip="no" Text="From Email:" />
+        <Control Id="FromEmailEdit" Type="Edit" X="130" Y="183" Width="150" Height="18" Property="FROM_EMAIL" />
+        
+        <Control Id="AdminEmailLabel" Type="Text" X="20" Y="210" Width="100" Height="17" TabSkip="no" Text="Admin Email:" />
+        <Control Id="AdminEmailEdit" Type="Edit" X="130" Y="208" Width="150" Height="18" Property="ADMIN_EMAIL" />
+        
+        <Control Id="Back" Type="PushButton" X="180" Y="293" Width="56" Height="17" Text="&amp;Back">
+          <Publish Event="NewDialog" Value="ServerConfigDlg">1</Publish>
+        </Control>
+        <Control Id="Next" Type="PushButton" X="236" Y="293" Width="56" Height="17" Default="yes" Text="&amp;Next">
+          <Publish Event="NewDialog" Value="VerifyReadyDlg">1</Publish>
+        </Control>
+        <Control Id="Cancel" Type="PushButton" X="304" Y="293" Width="56" Height="17" Cancel="yes" Text="Cancel">
+          <Publish Event="SpawnDialog" Value="CancelDlg">1</Publish>
+        </Control>
+      </Dialog>
+    </UI>
+
+    <!-- Properties with defaults -->
+    <Property Id="SERVER_ID" Value="SERVER1" />
+    <Property Id="COM_PORT" Value="COM10" />
+    <Property Id="RELAY_TYPE" Value="Commands" />
+    <Property Id="TEST_MODE" Value="0" />
+    <Property Id="EMAIL_ENABLED" Value="0" />
+    <Property Id="SMTP_SERVER" Value="smtp.office365.com" />
+    <Property Id="SMTP_PORT" Value="587" />
+    <Property Id="SMTP_USERNAME" />
+    <Property Id="SMTP_PASSWORD" Secure="yes" />
+    <Property Id="FROM_EMAIL" Value="cashdrawer@company.com" />
+    <Property Id="ADMIN_EMAIL" Value="dszajkowski@johnbear.com" />
+
+    <!-- Features -->
+    <Feature Id="ProductFeature" 
+             Title="Cash Drawer System" 
+             Level="1"
+             Description="Main cash drawer management system"
+             ConfigurableDirectory="INSTALLFOLDER">
+      
+      <ComponentGroupRef Id="ServerComponents" />
+      <ComponentGroupRef Id="ServerControlComponents" />
+    </Feature>
+
+    <Feature Id="ClientFeature"
+             Title="Client Application"
+             Level="1"
+             Description="Cash drawer client for workstations">
+      <ComponentGroupRef Id="ClientComponents" />
+      <ComponentRef Id="ApplicationShortcuts" />
+      <ComponentRef Id="DesktopShortcuts" />
+    </Feature>
+
+    <Feature Id="NetworkAdminFeature"
+             Title="Network Admin Tool"
+             Level="1"
+             Description="Network administration and management tool">
+      <ComponentGroupRef Id="NetworkAdminComponents" />
+    </Feature>
+
+    <!-- Directory structure -->
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="ProgramFilesFolder">
+        <Directory Id="ManufacturerFolder" Name="Daniel Szajkowski">
+          <Directory Id="INSTALLFOLDER" Name="Cash Drawer System">
+            <Directory Id="ServerFolder" Name="Server" />
+            <Directory Id="ControlFolder" Name="ServerControl" />
+            <Directory Id="ClientFolder" Name="Client" />
+            <Directory Id="NetworkAdminFolder" Name="NetworkAdmin" />
+            <Directory Id="LogsFolder" Name="logs" />
+          </Directory>
+        </Directory>
+      </Directory>
+      
+      <Directory Id="ProgramMenuFolder">
+        <Directory Id="ApplicationProgramsFolder" Name="Cash Drawer System"/>
+      </Directory>
+      
+      <Directory Id="DesktopFolder" Name="Desktop" />
+    </Directory>
+
+    <!-- Shortcuts -->
+    <DirectoryRef Id="ApplicationProgramsFolder">
+      <Component Id="ApplicationShortcuts" Guid="12345678-1234-1234-1234-123456789ABD">
+        <Shortcut Id="ClientStartMenuShortcut"
+                  Name="Cash Drawer Client"
+                  Description="Cash drawer client application"
+                  Target="[ClientFolder]CashDrawer.Client.exe"
+                  WorkingDirectory="ClientFolder"/>
+        
+        <Shortcut Id="NetworkAdminStartMenuShortcut"
+                  Name="Network Admin Tool"
+                  Description="Network administration tool"
+                  Target="[NetworkAdminFolder]CashDrawer.NetworkAdmin.exe"
+                  WorkingDirectory="NetworkAdminFolder"/>
+        
+        <RemoveFolder Id="ApplicationProgramsFolder" On="uninstall"/>
+        <RegistryValue Root="HKCU" Key="Software\DanielSzajkowski\CashDrawer" Name="installed" Type="integer" Value="1" KeyPath="yes"/>
+      </Component>
+    </DirectoryRef>
+
+    <!-- Desktop shortcuts -->
+    <DirectoryRef Id="DesktopFolder">
+      <Component Id="DesktopShortcuts" Guid="12345678-1234-1234-1234-123456789ABE">
+        <Shortcut Id="ClientDesktopShortcut"
+                  Name="Cash Drawer Client"
+                  Description="Cash drawer client application"
+                  Target="[ClientFolder]CashDrawer.Client.exe"
+                  WorkingDirectory="ClientFolder"/>
+        <RegistryValue Root="HKCU" Key="Software\DanielSzajkowski\CashDrawer" Name="desktop" Type="integer" Value="1" KeyPath="yes"/>
+      </Component>
+    </DirectoryRef>
+
+    <!-- Install services -->
+    <CustomAction Id="InstallMainService"
+                  Directory="ServerFolder"
+                  ExeCommand="[SystemFolder]sc.exe create CashDrawerServer binPath= &quot;[ServerFolder]CashDrawer.Server.exe&quot; start= auto DisplayName= &quot;Cash Drawer Server&quot;"
+                  Execute="deferred"
+                  Impersonate="no"
+                  Return="ignore" />
+
+    <CustomAction Id="InstallControlService"
+                  Directory="ControlFolder"
+                  ExeCommand="[SystemFolder]sc.exe create CashDrawerServerControl binPath= &quot;[ControlFolder]CashDrawer.ServerControl.exe&quot; start= auto DisplayName= &quot;Cash Drawer Server Control&quot;"
+                  Execute="deferred"
+                  Impersonate="no"
+                  Return="ignore" />
+
+    <CustomAction Id="ConfigureMainServiceRecovery"
+                  Directory="ServerFolder"
+                  ExeCommand="[SystemFolder]sc.exe failure CashDrawerServer reset= 86400 actions= restart/60000/restart/60000/restart/60000"
+                  Execute="deferred"
+                  Impersonate="no"
+                  Return="ignore" />
+
+    <CustomAction Id="StartMainService"
+                  Directory="ServerFolder"
+                  ExeCommand="[SystemFolder]sc.exe start CashDrawerServer"
+                  Execute="deferred"
+                  Impersonate="no"
+                  Return="ignore" />
+
+    <CustomAction Id="StartControlService"
+                  Directory="ControlFolder"
+                  ExeCommand="[SystemFolder]sc.exe start CashDrawerServerControl"
+                  Execute="deferred"
+                  Impersonate="no"
+                  Return="ignore" />
+
+    <!-- Uninstall services -->
+    <CustomAction Id="StopMainService"
+                  Directory="ServerFolder"
+                  ExeCommand="[SystemFolder]sc.exe stop CashDrawerServer"
+                  Execute="deferred"
+                  Impersonate="no"
+                  Return="ignore" />
+
+    <CustomAction Id="StopControlService"
+                  Directory="ControlFolder"
+                  ExeCommand="[SystemFolder]sc.exe stop CashDrawerServerControl"
+                  Execute="deferred"
+                  Impersonate="no"
+                  Return="ignore" />
+
+    <CustomAction Id="UninstallMainService"
+                  Directory="ServerFolder"
+                  ExeCommand="[SystemFolder]sc.exe delete CashDrawerServer"
+                  Execute="deferred"
+                  Impersonate="no"
+                  Return="ignore" />
+
+    <CustomAction Id="UninstallControlService"
+                  Directory="ControlFolder"
+                  ExeCommand="[SystemFolder]sc.exe delete CashDrawerServerControl"
+                  Execute="deferred"
+                  Impersonate="no"
+                  Return="ignore" />
+
+    <!-- Configure firewall -->
+    <CustomAction Id="ConfigureFirewall"
+                  Directory="ServerFolder"
+                  ExeCommand="powershell.exe -NoProfile -ExecutionPolicy Bypass -Command &quot;New-NetFirewallRule -DisplayName 'CashDrawer Server (TCP 5000)' -Direction Inbound -LocalPort 5000 -Protocol TCP -Action Allow -ErrorAction SilentlyContinue; New-NetFirewallRule -DisplayName 'CashDrawer Discovery (UDP 5001)' -Direction Inbound -LocalPort 5001 -Protocol UDP -Action Allow -ErrorAction SilentlyContinue; New-NetFirewallRule -DisplayName 'CashDrawer Control (TCP 5002)' -Direction Inbound -LocalPort 5002 -Protocol TCP -Action Allow -ErrorAction SilentlyContinue; New-NetFirewallRule -DisplayName 'CashDrawer Control Discovery (UDP 5003)' -Direction Inbound -LocalPort 5003 -Protocol UDP -Action Allow -ErrorAction SilentlyContinue&quot;"
+                  Execute="deferred"
+                  Impersonate="no"
+                  Return="ignore" />
+
+    <CustomAction Id="RemoveFirewallRules"
+                  Directory="ServerFolder"
+                  ExeCommand="powershell.exe -NoProfile -ExecutionPolicy Bypass -Command &quot;Remove-NetFirewallRule -DisplayName 'CashDrawer Server (TCP 5000)' -ErrorAction SilentlyContinue; Remove-NetFirewallRule -DisplayName 'CashDrawer Discovery (UDP 5001)' -ErrorAction SilentlyContinue; Remove-NetFirewallRule -DisplayName 'CashDrawer Control (TCP 5002)' -ErrorAction SilentlyContinue; Remove-NetFirewallRule -DisplayName 'CashDrawer Control Discovery (UDP 5003)' -ErrorAction SilentlyContinue&quot;"
+                  Execute="deferred"
+                  Impersonate="no"
+                  Return="ignore" />
+
+    <!-- Set permissions on ProgramData folder for service access -->
+    <!-- Using SIDs: S-1-5-19=LOCAL SERVICE, S-1-5-20=NETWORK SERVICE, S-1-5-32-544=Administrators -->
+    <CustomAction Id="SetProgramDataPermissions"
+                  Directory="ServerFolder"
+                  ExeCommand="cmd.exe /c md C:\ProgramData\CashDrawer 2&gt;nul &amp; icacls C:\ProgramData\CashDrawer /grant *S-1-5-19:(OI)(CI)F /grant *S-1-5-20:(OI)(CI)F /grant *S-1-5-32-544:(OI)(CI)F /T /Q"
+                  Execute="deferred"
+                  Impersonate="no"
+                  Return="ignore" />
+
+    <!-- Delete incompatible users.json from old Python/VB6 system on upgrade -->
+    <CustomAction Id="DeleteOldUsers"
+                  Directory="ServerFolder"
+                  ExeCommand="cmd.exe /c &quot;if exist &quot;%ProgramData%\CashDrawer\users.json&quot; del /f /q &quot;%ProgramData%\CashDrawer\users.json&quot;&quot;"
+                  Execute="deferred"
+                  Impersonate="no"
+                  Return="ignore" />
+
+    <!-- Upgrade actions - stop services before upgrading -->
+    <CustomAction Id="StopServicesForUpgrade"
+                  Directory="ServerFolder"
+                  ExeCommand="cmd.exe /c &quot;sc stop CashDrawerServer &amp; sc stop CashDrawerServerControl&quot;"
+                  Execute="deferred"
+                  Impersonate="no"
+                  Return="ignore" />
+
+    <!-- NOTE: Deleting users.json on upgrade to fix BCrypt incompatibility -->
+
+    <CustomAction Id="StartServicesAfterUpgrade"
+                  Directory="ServerFolder"
+                  ExeCommand="cmd.exe /c &quot;sc start CashDrawerServer &amp; timeout /t 2 /nobreak &gt;nul &amp; sc start CashDrawerServerControl&quot;"
+                  Execute="deferred"
+                  Impersonate="no"
+                  Return="ignore" />
+
+    <!-- Installation sequence -->
+    <InstallExecuteSequence>
+      <!-- Upgrade actions - both before InstallFiles, execute in order -->
+      <Custom Action="StopServicesForUpgrade" Before="InstallFiles">WIX_UPGRADE_DETECTED</Custom>
+      <Custom Action="DeleteOldUsers" Before="InstallFiles">WIX_UPGRADE_DETECTED</Custom>
+      
+      <!-- Fresh install AND upgrade: Set permissions after files installed -->
+      <Custom Action="SetProgramDataPermissions" After="InstallFiles">(NOT Installed AND (&amp;ProductFeature=3)) OR WIX_UPGRADE_DETECTED</Custom>
+      
+      <!-- Fresh install actions only -->
+      <Custom Action="InstallMainService" After="SetProgramDataPermissions">NOT Installed AND (&amp;ProductFeature=3)</Custom>
+      <Custom Action="InstallControlService" After="InstallMainService">NOT Installed AND (&amp;ProductFeature=3)</Custom>
+      <Custom Action="ConfigureMainServiceRecovery" After="InstallControlService">NOT Installed AND (&amp;ProductFeature=3)</Custom>
+      <Custom Action="ConfigureFirewall" After="ConfigureMainServiceRecovery">NOT Installed AND (&amp;ProductFeature=3)</Custom>
+      <Custom Action="StartMainService" After="ConfigureFirewall">NOT Installed AND (&amp;ProductFeature=3)</Custom>
+      <Custom Action="StartControlService" After="StartMainService">NOT Installed AND (&amp;ProductFeature=3)</Custom>
+      
+      <!-- Upgrade: Restart services after permissions set -->
+      <Custom Action="StartServicesAfterUpgrade" After="SetProgramDataPermissions">WIX_UPGRADE_DETECTED</Custom>
+      
+      <!-- Uninstall actions -->
+      <Custom Action="StopMainService" Before="RemoveFiles">Installed AND (REMOVE="ALL")</Custom>
+      <Custom Action="StopControlService" After="StopMainService">Installed AND (REMOVE="ALL")</Custom>
+      <Custom Action="UninstallMainService" After="StopControlService">Installed AND (REMOVE="ALL")</Custom>
+      <Custom Action="UninstallControlService" After="UninstallMainService">Installed AND (REMOVE="ALL")</Custom>
+      <Custom Action="RemoveFirewallRules" After="UninstallControlService">Installed AND (REMOVE="ALL")</Custom>
+    </InstallExecuteSequence>
+
+    <!-- License agreement -->
+    <WixVariable Id="WixUILicenseRtf" Value="License.rtf" />
+    
+  </Product>
+
+  <!-- Component groups are auto-generated by heat.exe in separate .wxs files -->
+
+</Wix>
