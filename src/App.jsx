@@ -38,6 +38,7 @@ const DEFAULTS = {
   dealerCode: "095207", dealerName: "JOHN BEAR", area: "80", station: "587",
   phone: "905-575-9400", wdkEmail: "wdk.courtesy@gm.com", theme: "light",
   knownDealers: KNOWN_DEALERS_DEFAULT,
+  users: ["Daniel"], defaultUser: "Daniel",
 };
 
 // ─── Barcode Helpers ─────────────────────────────────────────────
@@ -112,7 +113,7 @@ function drawUnderlinedText(doc, text, x, y, opts = {}) {
 }
 
 // ─── PDF Generator ───────────────────────────────────────────────
-async function generateWoodstockPDF({ settings, shortItems, dippItems, dippComments, dippDescriptions = {}, wrongDealerItems, completedBy, formDate, poInfo }) {
+async function generateWoodstockPDF({ settings, shortItems, dippItems, dippComments, dippDescriptions = {}, wrongDealerItems, completedBy, formDate, poInfo, toteChoices = {}, wdContact = {}, wdRedirect = {} }) {
   // Load the original Woodstock form as template (pixel-perfect layout)
   const templateBytes = Uint8Array.from(atob(WOODSTOCK_TEMPLATE_B64), c => c.charCodeAt(0));
   const pdfDoc = await PDFDocument.load(templateBytes);
@@ -148,7 +149,9 @@ async function generateWoodstockPDF({ settings, shortItems, dippItems, dippComme
     drawInCell(item.shippingOrder, sCols[2], sRows[r], sCols[3], sRows[r + 1]);
     drawInCell(String(item.expectedQty), sCols[3], sRows[r], sCols[4], sRows[r + 1]);
     drawInCell(String(item.scannedQty), sCols[4], sRows[r], sCols[5], sRows[r + 1]);
-    drawInCell("", sCols[5], sRows[r], sCols[6], sRows[r + 1]);
+    const tKey = `${item.partNumber}_${item.shippingOrder}`;
+    const tVal = toteChoices[tKey] || "";
+    drawInCell(tVal === "T" ? "Tote" : tVal === "P" ? "Pallet" : tVal === "?" ? "Unknown" : "", sCols[5], sRows[r], sCols[6], sRows[r + 1]);
   }
 
   // === DIPP TABLE ===
@@ -172,8 +175,8 @@ async function generateWoodstockPDF({ settings, shortItems, dippItems, dippComme
     drawInCell(item.partNumber, wCols[0], wRows[r], wCols[1], wRows[r + 1], { size: 8 });
     drawInCell(item.dealerCode, wCols[1], wRows[r], wCols[2], wRows[r + 1], { size: 8 });
     drawInCell(item.shippingOrder, wCols[2], wRows[r], wCols[3], wRows[r + 1], { size: 8 });
-    drawInCell("", wCols[3], wRows[r], wCols[4], wRows[r + 1], { size: 8 });
-    drawInCell("", wCols[4], wRows[r], wCols[5], wRows[r + 1], { size: 8 });
+    drawInCell(wdContact[item.id] === "Y" ? "Yes" : wdContact[item.id] === "N" ? "No" : "", wCols[3], wRows[r], wCols[4], wRows[r + 1], { size: 8 });
+    drawInCell(wdRedirect[item.id] === "Y" ? "Yes" : wdRedirect[item.id] === "N" ? "No" : "", wCols[4], wRows[r], wCols[5], wRows[r + 1], { size: 8 });
   }
 
   // === COMPLETED BY / DATE / PHONE ===
@@ -219,6 +222,7 @@ export default function App() {
   const [settingsTab, setSettingsTab] = useState("general");
   const [settingsDraft, setSettingsDraft] = useState(DEFAULTS);
   const [newDC, setNewDC] = useState(""); const [newDN, setNewDN] = useState(""); const [newDCo, setNewDCo] = useState(""); const [newDE, setNewDE] = useState("");
+  const [newUserName, setNewUserName] = useState("");
   const t = makeTheme(settings.theme);
   const ff = "'JetBrains Mono','Fira Code','SF Mono','Consolas',monospace";
 
@@ -236,8 +240,11 @@ export default function App() {
   const [selectedShipment, setSelectedShipment] = useState("all");
   const [dippComments, setDippComments] = useState({});
   const [dippDescriptions, setDippDescriptions] = useState({});
-  const [completedBy, setCompletedBy] = useState("");
+  const [completedBy, setCompletedBy] = useState(() => { const s = loadSettings(); return s.defaultUser || (s.users && s.users[0]) || ""; });
   const [formDate, setFormDate] = useState(new Date().toISOString().split("T")[0]);
+  const [toteChoices, setToteChoices] = useState({});  // key: partNumber+SO -> "T"/"P"/"?"
+  const [wdContact, setWdContact] = useState({});       // key: id -> "Y"/"N"/""
+  const [wdRedirect, setWdRedirect] = useState({});     // key: id -> "Y"/"N"/""
   const [pdfGenerating, setPdfGenerating] = useState(false);
   const [lastPdfBase64, setLastPdfBase64] = useState(null);
   const [lastPdfBlob, setLastPdfBlob] = useState(null);
@@ -385,7 +392,7 @@ export default function App() {
   const emailSubject = buildSubject(subParts, settings.dealerCode, poInfo);
   const getCCStr = () => { const codes = [...new Set(getWD().map(i => i.dealerCode))]; return codes.map(c => lookupDealer(c)).filter(d => d?.email).map(d => `${d.contact ? `"${d.contact}" ` : ""}<${d.email}>`).join(", "); };
 
-  const generatePDFHandler = async () => { setPdfGenerating(true); try { const pdfDoc = await generateWoodstockPDF({ settings, shortItems, dippItems: getDipp(), dippComments, dippDescriptions, wrongDealerItems: getWD(), completedBy, formDate, poInfo }); const pdfBytes = await pdfDoc.save(); const fn = `woodstock_form_${poInfo ? `${poInfo.pbsPO}_${poInfo.gmControl}` : "form"}_${formDate}.pdf`; const blob = new Blob([pdfBytes], { type: "application/pdf" }); setLastPdfBlob(blob); const b64 = btoa(pdfBytes.reduce((d, b) => d + String.fromCharCode(b), "")); setLastPdfBase64(b64); setLastPdfName(fn); const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = fn; a.click(); URL.revokeObjectURL(url); showFB("✓ PDF generated", t.green); } catch (err) { showFB(`PDF error: ${err.message}`, t.red); } setPdfGenerating(false); };
+  const generatePDFHandler = async () => { setPdfGenerating(true); try { const pdfDoc = await generateWoodstockPDF({ settings, shortItems, dippItems: getDipp(), dippComments, dippDescriptions, wrongDealerItems: getWD(), completedBy, formDate, poInfo, toteChoices, wdContact, wdRedirect }); const pdfBytes = await pdfDoc.save(); const fn = `woodstock_form_${poInfo ? `${poInfo.pbsPO}_${poInfo.gmControl}` : "form"}_${formDate}.pdf`; const blob = new Blob([pdfBytes], { type: "application/pdf" }); setLastPdfBlob(blob); const b64 = btoa(pdfBytes.reduce((d, b) => d + String.fromCharCode(b), "")); setLastPdfBase64(b64); setLastPdfName(fn); const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = fn; a.click(); URL.revokeObjectURL(url); showFB("✓ PDF generated", t.green); } catch (err) { showFB(`PDF error: ${err.message}`, t.red); } setPdfGenerating(false); };
   const printPDF = () => { if (!lastPdfBlob) return; const w = window.open(URL.createObjectURL(lastPdfBlob)); if (w) w.addEventListener("load", () => setTimeout(() => w.print(), 500)); };
   const emailOutlook = () => { if (!lastPdfBase64) return; const body = `Please find the attached Woodstock form for dealer ${settings.dealerCode} (${settings.dealerName}).\n\nDate: ${formDate}\nCompleted by: ${completedBy || "(not specified)"}\nPhone: ${settings.phone}${poInfo ? `\nPO: ${poInfo.pbsPO} / GM Control: ${poInfo.gmControl}` : ""}\n\nSummary:\n${shortItems.length ? `- ${shortItems.length} short\n` : ""}${getDipp().length ? `- ${getDipp().length} DIPP\n` : ""}${getWD().length ? `- ${getWD().length} wrong dealer\n` : ""}`; const eml = buildEML({ to: settings.wdkEmail, cc: getCCStr(), subject: emailSubject, bodyText: body, pdfBase64: lastPdfBase64, pdfFilename: lastPdfName }); const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([eml], { type: "message/rfc822" })); a.download = `woodstock_${formDate}.eml`; document.body.appendChild(a); a.click(); document.body.removeChild(a); showFB("✓ .eml downloaded — open in Outlook", t.green); };
 
@@ -429,6 +436,14 @@ export default function App() {
             <div style={{ marginBottom: 14 }}><label style={S.lbl}>Phone</label><input style={S.mI} value={settingsDraft.phone} onChange={e => setSettingsDraft(p => ({ ...p, phone: e.target.value }))} /></div>
             <div style={{ marginBottom: 14 }}><label style={S.lbl}>Woodstock Email</label><input style={S.mI} value={settingsDraft.wdkEmail} onChange={e => setSettingsDraft(p => ({ ...p, wdkEmail: e.target.value }))} /></div>
             <div style={{ marginBottom: 14 }}><label style={S.lbl}>Theme</label><div style={{ display: "flex", gap: 8, marginTop: 4 }}>{["light", "dark"].map(m => <button key={m} onClick={() => setSettingsDraft(p => ({ ...p, theme: m }))} style={{ padding: "8px 20px", borderRadius: 6, border: `2px solid ${settingsDraft.theme === m ? t.accent : t.border}`, background: m === "dark" ? "#18181b" : "#f8f8fa", color: m === "dark" ? "#e4e4e7" : "#18181b", fontFamily: ff, fontSize: 12, fontWeight: settingsDraft.theme === m ? 700 : 400, cursor: "pointer" }}>{m === "light" ? "☀ Light" : "🌙 Dark"}</button>)}</div></div>
+            <div style={{ marginBottom: 14 }}><label style={S.lbl}>Users</label>
+              <div style={{ display: "flex", gap: 6, marginTop: 4, marginBottom: 8 }}><input style={{ ...S.mI, flex: 1, marginBottom: 0 }} placeholder="Add user name" value={newUserName} onChange={e => setNewUserName(e.target.value)} onKeyDown={e => { if (e.key === "Enter") { const n = newUserName.trim(); if (n && !(settingsDraft.users || []).includes(n)) { setSettingsDraft(p => ({ ...p, users: [...(p.users || []), n] })); setNewUserName(""); } } }} /><button style={S.btn(t.accent, "#fff")} onClick={() => { const n = newUserName.trim(); if (n && !(settingsDraft.users || []).includes(n)) { setSettingsDraft(p => ({ ...p, users: [...(p.users || []), n] })); setNewUserName(""); } }}>Add</button></div>
+              {(settingsDraft.users || []).map(u => <div key={u} style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+                <span style={{ flex: 1, fontSize: 13, color: t.text }}>{u}{u === settingsDraft.defaultUser && <span style={{ ...S.bg(`${t.green}20`, t.greenText), marginLeft: 6, fontSize: 10 }}>DEFAULT</span>}</span>
+                <button style={S.sm(t.bg3, t.accent)} onClick={() => setSettingsDraft(p => ({ ...p, defaultUser: u }))}>★</button>
+                <button style={S.sm(t.bg3, t.textFaint)} onClick={() => setSettingsDraft(p => ({ ...p, users: (p.users || []).filter(x => x !== u), defaultUser: p.defaultUser === u ? ((p.users || []).filter(x => x !== u)[0] || "") : p.defaultUser }))}>✕</button>
+              </div>)}
+            </div>
           </>)}
           {settingsTab === "dealers" && (<>
             <div style={{ marginBottom: 12, fontSize: 11, color: t.textMuted }}>Dealer directory for wrong-dealer ID and email CC.</div>
@@ -567,7 +582,9 @@ export default function App() {
         {wsTab === "form" && (<>
           <div style={S.card}>
             <div style={S.cH}><span style={S.cL}>Woodstock Form</span></div>
-            <div style={{ padding: 12, borderBottom: `1px solid ${t.border}` }}><div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}><div><label style={S.lbl}>Completed By</label><input style={S.inp} value={completedBy} onChange={e => setCompletedBy(e.target.value)} placeholder="Name" /></div><div><label style={S.lbl}>Date</label><input style={S.inp} type="date" value={formDate} onChange={e => setFormDate(e.target.value)} /></div><div><label style={S.lbl}>Phone</label><input style={{ ...S.inp, color: t.textFaint }} value={settings.phone} readOnly /></div>{purchaseOrders.length > 1 && <div><label style={S.lbl}>PO</label><select style={S.sel} value={activePO || ""} onChange={e => setActivePO(e.target.value)}><option value="__all__">All</option>{purchaseOrders.map(po => <option key={po.id} value={po.pbsPO}>{po.pbsPO}</option>)}</select></div>}</div></div>
+            <div style={{ padding: 12, borderBottom: `1px solid ${t.border}` }}><div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}><div><label style={S.lbl}>Completed By</label><select style={S.sel} value={completedBy} onChange={e => setCompletedBy(e.target.value)}><option value="">— select —</option>{(settings.users || []).map(u => <option key={u} value={u}>{u}</option>)}</select></div><div><label style={S.lbl}>Date</label><input style={S.inp} type="date" value={formDate} onChange={e => setFormDate(e.target.value)} /></div><div><label style={S.lbl}>Phone</label><input style={{ ...S.inp, color: t.textFaint }} value={settings.phone} readOnly /></div>{purchaseOrders.length > 1 && <div><label style={S.lbl}>PO</label><select style={S.sel} value={activePO || ""} onChange={e => setActivePO(e.target.value)}><option value="__all__">All</option>{purchaseOrders.map(po => <option key={po.id} value={po.pbsPO}>{po.pbsPO}</option>)}</select></div>}</div></div>
+            {shortItems.length > 0 && <div style={{ padding: 12, borderBottom: `1px solid ${t.border}` }}><label style={{ ...S.lbl, marginBottom: 6, display: "block" }}>Tote or Pallet? (Short Items)</label><div style={{ overflowX: "auto" }}><table style={S.tbl}><thead><tr><th style={S.th}>Part #</th><th style={S.th}>SO #</th><th style={S.th}>Tote / Pallet</th></tr></thead><tbody>{shortItems.map(item => { const tKey = `${item.partNumber}_${item.shippingOrder}`; return <tr key={tKey}><td style={S.td(t.textStrong)}><strong>{item.partNumber}</strong></td><td style={S.td()}>{item.shippingOrder}</td><td style={S.td()}><div style={{ display: "flex", gap: 4 }}>{[["T", "Tote"], ["P", "Pallet"], ["?", "Unknown"]].map(([v, lbl]) => <button key={v} onClick={() => setToteChoices(p => ({ ...p, [tKey]: p[tKey] === v ? "" : v }))} style={{ padding: "4px 10px", borderRadius: 4, border: `1px solid ${toteChoices[tKey] === v ? t.accent : t.border}`, background: toteChoices[tKey] === v ? `${t.accent}18` : t.bg2, color: toteChoices[tKey] === v ? t.accent : t.textMuted, fontFamily: ff, fontSize: 11, fontWeight: toteChoices[tKey] === v ? 700 : 400, cursor: "pointer" }}>{lbl}</button>)}</div></td></tr>; })}</tbody></table></div></div>}
+            {getWD().length > 0 && <div style={{ padding: 12, borderBottom: `1px solid ${t.border}` }}><label style={{ ...S.lbl, marginBottom: 6, display: "block" }}>Wrong Dealer Options</label><div style={{ overflowX: "auto" }}><table style={S.tbl}><thead><tr><th style={S.th}>Part #</th><th style={S.th}>Dealer</th><th style={S.th}>Contacted?</th><th style={S.th}>Redirect?</th></tr></thead><tbody>{getWD().map(item => <tr key={item.id}><td style={S.td(t.textStrong)}><strong>{item.partNumber}</strong></td><td style={S.td(t.purpleText)}><strong>{item.dealerCode}</strong></td><td style={S.td()}><div style={{ display: "flex", gap: 4 }}>{[["Y", "Yes"], ["N", "No"]].map(([v, lbl]) => <button key={v} onClick={() => setWdContact(p => ({ ...p, [item.id]: p[item.id] === v ? "" : v }))} style={{ padding: "4px 10px", borderRadius: 4, border: `1px solid ${wdContact[item.id] === v ? t.accent : t.border}`, background: wdContact[item.id] === v ? `${t.accent}18` : t.bg2, color: wdContact[item.id] === v ? t.accent : t.textMuted, fontFamily: ff, fontSize: 11, fontWeight: wdContact[item.id] === v ? 700 : 400, cursor: "pointer" }}>{lbl}</button>)}</div></td><td style={S.td()}><div style={{ display: "flex", gap: 4 }}>{[["Y", "Yes"], ["N", "No"]].map(([v, lbl]) => <button key={v} onClick={() => setWdRedirect(p => ({ ...p, [item.id]: p[item.id] === v ? "" : v }))} style={{ padding: "4px 10px", borderRadius: 4, border: `1px solid ${wdRedirect[item.id] === v ? t.accent : t.border}`, background: wdRedirect[item.id] === v ? `${t.accent}18` : t.bg2, color: wdRedirect[item.id] === v ? t.accent : t.textMuted, fontFamily: ff, fontSize: 11, fontWeight: wdRedirect[item.id] === v ? 700 : 400, cursor: "pointer" }}>{lbl}</button>)}</div></td></tr>)}</tbody></table></div></div>}
             <div style={{ display: "flex", gap: 8, padding: 12, background: t.bg3, flexWrap: "wrap", alignItems: "center" }}>
               <button style={{ padding: "8px 16px", background: t.accent, color: "#fff", border: "none", borderRadius: 6, fontFamily: ff, fontSize: 12, fontWeight: 600, cursor: "pointer" }} onClick={generatePDFHandler} disabled={pdfGenerating}>{pdfGenerating ? "⏳..." : "⬇ Generate PDF"}</button>
               {lastPdfBlob && <><button style={{ padding: "8px 16px", background: t.bg2, color: t.text, border: `1px solid ${t.border}`, borderRadius: 6, fontFamily: ff, fontSize: 12, fontWeight: 600, cursor: "pointer" }} onClick={printPDF}>🖨 Print</button><button style={{ padding: "8px 16px", background: "#0078d4", color: "#fff", border: "none", borderRadius: 6, fontFamily: ff, fontSize: 12, fontWeight: 600, cursor: "pointer" }} onClick={emailOutlook}>✉ Outlook</button></>}
