@@ -207,7 +207,7 @@ function buildSubjectParts(si, di, wi) { const p = []; if (di.length) p.push("DI
 function buildSubject(parts, dc, po) { return `${parts.length ? parts.join(" / ") : "Woodstock Form"} - ${dc}${po ? ` - ${po.gmControl || po.pbsPO}` : ""}`; }
 
 // ─── Pink Sheet Generator ───────────────────────────────────────
-async function generatePinkSheet(purchaseOrders, activePO) {
+async function generatePinkSheet(purchaseOrders, activePO, scannedItems = []) {
   const wb = new ExcelJS.Workbook();
   const pinkFill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFF80FF" } };
   const boldFont = { bold: true, size: 11, name: "Arial" };
@@ -287,6 +287,8 @@ async function generatePinkSheet(purchaseOrders, activePO) {
       }
 
       // Write shipped rows
+      const greenFill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF90EE90" } };
+      const greenBorder = { top: { style: "medium", color: { argb: "FF228B22" } }, bottom: { style: "medium", color: { argb: "FF228B22" } }, left: { style: "medium", color: { argb: "FF228B22" } }, right: { style: "medium", color: { argb: "FF228B22" } } };
       for (const r of shipped) {
         const dr = ws.getRow(row);
         dr.getCell(1).value = r.status;
@@ -298,15 +300,30 @@ async function generatePinkSheet(purchaseOrders, activePO) {
         dr.getCell(7).value = r.qtyProc;
         dr.getCell(8).value = r.shipmentNo || "";
         for (let c = 1; c <= 8; c++) dr.getCell(c).font = normalFont;
-        // Supersession highlight
+        // Supersession highlight (Part Ordered ≠ Part Processed)
         if (r.partOrdered && r.partProcessed && r.partOrdered !== r.partProcessed) {
           dr.getCell(4).fill = pinkFill;
           dr.getCell(4).font = { ...normalFont, bold: true };
         }
-        // Qty difference highlight
+        // Qty difference highlight (Ordered ≠ Proc)
         if (r.qtyOrdered !== r.qtyProc) {
           dr.getCell(7).fill = pinkFill;
           dr.getCell(7).font = { ...normalFont, bold: true };
+        }
+        // Scanned verification: find matching scan by part + SO
+        const partToMatch = r.partProcessed || r.partOrdered;
+        const scan = scannedItems.find(s => s.partNumber === partToMatch && s.shippingOrder === r.shipmentNo);
+        if (scan) {
+          if (scan.quantity === r.qtyProc) {
+            // Scanned and matches — green circle
+            dr.getCell(7).fill = greenFill;
+            dr.getCell(7).border = greenBorder;
+            dr.getCell(7).font = { ...normalFont, bold: true };
+          } else {
+            // Scanned but qty mismatch — pink
+            dr.getCell(7).fill = pinkFill;
+            dr.getCell(7).font = { ...normalFont, bold: true };
+          }
         }
         row++;
       }
@@ -513,7 +530,7 @@ export default function App() {
   const generatePDFHandler = async () => { setPdfGenerating(true); try { const pdfDoc = await generateWoodstockPDF({ settings, shortItems, dippItems: getDipp(), dippComments, dippDescriptions, wrongDealerItems: getWD(), completedBy, formDate, poInfo, toteChoices, wdContact, wdRedirect }); const pdfBytes = await pdfDoc.save(); const fn = `woodstock_form_${poInfo ? `${poInfo.pbsPO}_${poInfo.gmControl}` : "form"}_${formDate}.pdf`; const blob = new Blob([pdfBytes], { type: "application/pdf" }); setLastPdfBlob(blob); const b64 = btoa(pdfBytes.reduce((d, b) => d + String.fromCharCode(b), "")); setLastPdfBase64(b64); setLastPdfName(fn); const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = fn; a.click(); URL.revokeObjectURL(url); showFB("✓ PDF generated", t.green); } catch (err) { showFB(`PDF error: ${err.message}`, t.red); } setPdfGenerating(false); };
   const printPDF = () => { if (!lastPdfBlob) return; const w = window.open(URL.createObjectURL(lastPdfBlob)); if (w) w.addEventListener("load", () => setTimeout(() => w.print(), 500)); };
   const emailOutlook = () => { if (!lastPdfBase64) return; const body = `Please find the attached Woodstock form for dealer ${settings.dealerCode} (${settings.dealerName}).\n\nDate: ${formDate}\nCompleted by: ${completedBy || "(not specified)"}\nPhone: ${settings.phone}${poInfo ? `\nPO: ${poInfo.pbsPO} / GM Control: ${poInfo.gmControl}` : ""}\n\nSummary:\n${shortItems.length ? `- ${shortItems.length} short\n` : ""}${getDipp().length ? `- ${getDipp().length} DIPP\n` : ""}${getWD().length ? `- ${getWD().length} wrong dealer\n` : ""}`; const eml = buildEML({ to: settings.wdkEmail, cc: getCCStr(), subject: emailSubject, bodyText: body, pdfBase64: lastPdfBase64, pdfFilename: lastPdfName }); const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([eml], { type: "message/rfc822" })); a.download = `woodstock_${formDate}.eml`; document.body.appendChild(a); a.click(); document.body.removeChild(a); showFB("✓ .eml downloaded — open in Outlook", t.green); };
-  const downloadPinkSheet = async () => { try { const blob = await generatePinkSheet(purchaseOrders, activePO); if (!blob) { showFB("No PO data to generate pink sheet", t.red); return; } const fn = `pink_sheet_${activePO || "all"}_${formDate}.xlsx`; const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = fn; a.click(); URL.revokeObjectURL(url); showFB(`✓ Pink sheet downloaded: ${fn}`, t.green); } catch (err) { showFB(`Pink sheet error: ${err.message}`, t.red); } };
+  const downloadPinkSheet = async () => { try { const blob = await generatePinkSheet(purchaseOrders, activePO, scannedItems); if (!blob) { showFB("No PO data to generate pink sheet", t.red); return; } const fn = `pink_sheet_${activePO || "all"}_${formDate}.xlsx`; const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = fn; a.click(); URL.revokeObjectURL(url); showFB(`✓ Pink sheet downloaded: ${fn}`, t.green); } catch (err) { showFB(`Pink sheet error: ${err.message}`, t.red); } };
 
   // ─── Styles ─────────────────────────────────────────────────
   const S = {
