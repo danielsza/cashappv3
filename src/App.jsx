@@ -96,132 +96,217 @@ function parseFilename(name) {
   return { pbsPO: seg[0] || "", gmControl: seg[1] || "", dateStr: seg.slice(2).join("-") || "" };
 }
 
+// ─── GM Logo (base64 PNG) ────────────────────────────────────────
+const GM_LOGO_B64 = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAZAAAAA7CAYAAABVE9xVAAAKMWlDQ1BJQ0MgUHJvZmlsZQAAeJydlndUU9kWh8+9N71QkhCKlNBraFICSA29SJEuKjEJEErAkAAiNkRUcERRkaYIMijggKNDkbEiioUBUbHrBBlE1HFwFBuWSWStGd+8ee/Nm98f935rn73P3Wfvfda6AJD8gwXCTFgJgAyhWBTh58WIjYtnYAcBDPAAA2wA4HCzs0IW+EYCmQJ82IxsmRP4F726DiD5+yrTP4zBAP+flLlZIjEAUJiM5/L42VwZF8k4PVecJbdPyZi2NE3OMErOIlmCMlaTc/IsW3z2mWUPOfMyhDwZy3PO4mXw5Nwn4405Er6MkWAZF+cI+LkyviZjg3RJhkDGb+SxGXxONgAoktwu5nNTZGwtY5IoMoIt43kA4EjJX/DSL1jMzxPLD8XOzFouEiSniBkmXFOGjZMTi+HPz03ni8XMMA43jSPiMdiZGVkc4XIAZs/8WRR5bRmyIjvYODk4MG0tbb4o1H9d/JuS93aWXoR/7hlEH/jD9ld+mQ0AsKZltdn6h21pFQBd6wFQu/2HzWAvAIqyvnUOfXEeunxeUsTiLGcrq9zcXEsBn2spL+jv+p8Of0NffM9Svt3v5WF485M4knQxQ143bmZ6pkTEyM7icPkM5p+H+B8H/nUeFhH8JL6IL5RFRMumTCBMlrVbyBOIBZlChkD4n5r4D8P+pNm5lona+BHQllgCpSEaQH4eACgqESAJe2Qr0O99C8ZHA/nNi9GZmJ37z4L+fVe4TP7IFiR/jmNHRDK4ElHO7Jr8WgI0IABFQAPqQBvoAxPABLbAEbgAD+ADAkEoiARxYDHgghSQAUQgFxSAtaAYlIKtYCeoBnWgETSDNnAYdIFj4DQ4By6By2AE3AFSMA6egCnwCsxAEISFyBAVUod0IEPIHLKFWJAb5AMFQxFQHJQIJUNCSAIVQOugUqgcqobqoWboW+godBq6AA1Dt6BRaBL6FXoHIzAJpsFasBFsBbNgTzgIjoQXwcnwMjgfLoK3wJVwA3wQ7oRPw5fgEVgKP4GnEYAQETqiizARFsJGQpF4JAkRIauQEqQCaUDakB6kH7mKSJGnyFsUBkVFMVBMlAvKHxWF4qKWoVahNqOqUQdQnag+1FXUKGoK9RFNRmuizdHO6AB0LDoZnYsuRlegm9Ad6LPoEfQ4+hUGg6FjjDGOGH9MHCYVswKzGbMb0445hRnGjGGmsVisOtYc64oNxXKwYmwhtgp7EHsSewU7jn2DI+J0cLY4X1w8TogrxFXgWnAncFdwE7gZvBLeEO+MD8Xz8MvxZfhGfA9+ED+OnyEoE4wJroRIQiphLaGS0EY4X1w8TogrxFXgWnAncFdwE7gZvBLeEO+MD8Xz8MvxZfhGfA9+ED+OnyEoE4wJroRIQiphLaGy0EZ4X1w8TogrxFXgWnAncFdwE7gZvBLeEO+MD8Xz8MvxZfhGfA9+EA==";
+
+// ─── PDF helper: draw underlined text ────────────────────────────
+function drawUnderlinedText(doc, text, x, y, opts = {}) {
+  const { bold = false, fontSize } = opts;
+  if (fontSize) doc.setFontSize(fontSize);
+  if (bold) doc.setFont("helvetica", "bold"); else doc.setFont("helvetica", "normal");
+  doc.text(text, x, y);
+  const tw = doc.getTextWidth(text);
+  const sz = doc.getFontSize();
+  doc.setLineWidth(0.3);
+  doc.line(x, y + sz * 0.01 * 4, x + tw, y + sz * 0.01 * 4);
+}
+
 // ─── PDF Generator ───────────────────────────────────────────────
 function generateWoodstockPDF({ settings, shortItems, dippItems, dippComments, dippDescriptions = {}, wrongDealerItems, completedBy, formDate, poInfo }) {
   const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "letter" });
   const pw = doc.internal.pageSize.getWidth();   // 215.9
   const ph = doc.internal.pageSize.getHeight();   // 279.4
-  const ml = 12, mr = 12;                         // margins
-  const cw = pw - ml - mr;                        // content width
-  let y = 10;
+  const ml = 12, mr = 12;
+  const cw = pw - ml - mr;
+  let y = 8;
 
-  // ── Outer border ──
-  doc.setDrawColor(0); doc.setLineWidth(0.5);
-  doc.rect(5, 5, pw - 10, ph - 10);
+  // ── Outer border (thick) ──
+  doc.setDrawColor(0); doc.setLineWidth(0.8);
+  doc.rect(6, 6, pw - 12, ph - 12);
 
-  // ── Header ──
-  doc.setFontSize(14); doc.setFont("helvetica", "bold");
-  doc.text("General Motors of Canada Ltd.", pw / 2, y + 8, { align: "center" });
-  doc.setFontSize(11);
-  doc.text("National Parts Distribution Center", pw / 2, y + 14, { align: "center" });
-  doc.text("Woodstock, Ontario", pw / 2, y + 20, { align: "center" });
-  doc.text("Your Satisfaction Is Our Goal!", pw / 2, y + 26, { align: "center" });
-  y += 32;
+  // ── GM Logo (top-left) ──
+  try { doc.addImage(GM_LOGO_B64, "PNG", 9, 9, 45, 7); } catch(e) { /* logo optional */ }
 
-  // ── Area / Station / Dealer info line ──
-  doc.setFontSize(10); doc.setFont("helvetica", "bold");
-  doc.text(`Area:  ${settings.area || "80"}`, ml, y);
-  doc.text(`Station No.:`, ml + 30, y);
-  doc.text(`${settings.station || "587"}`, ml + 55, y);
-  doc.text(`Dealer Name:`, ml + 72, y);
-  doc.text(`${settings.dealerName || ""}`, ml + 100, y);
-  doc.text(`Dealer Code: ${settings.dealerCode || ""}`, pw - mr, y, { align: "right" });
-  y += 3;
-  doc.setLineWidth(0.3); doc.line(ml, y, pw - mr, y); y += 5;
-
-  // ── Body text ──
-  doc.setFontSize(10); doc.setFont("helvetica", "bolditalic");
-  doc.text("It was a pleasure to pack your order.  Your satisfaction is our goal!", ml, y); y += 6;
-
-  doc.setFontSize(8); doc.setFont("helvetica", "normal");
-  const para1 = "In order to improve the quality of your shipment, we ask that you complete this sheet when you receive your order.  This will allow us to start the investigation on any missing parts shipped out of Woodstock.";
-  const lines1 = doc.splitTextToSize(para1, cw);
-  doc.text(lines1, ml, y); y += lines1.length * 3.5 + 2;
-
-  doc.setFont("helvetica", "bold");
-  doc.text("If you receive an overage or wrong part, please claim on Parts Workbench.", ml, y); y += 5;
-
-  doc.setFont("helvetica", "normal"); doc.setFontSize(7.5);
-  const para2 = "All parts received in a non-returnable condition must be reported within 24 hours of receiving and claimed as damaged on Parts Workbench. These parts will be accepted without penalty to your dealership. If you submit a return on a part in a non-returnable condition or has carrier caused damage that has not been reported within the 24 hours it will be refused.";
-  const lines2 = doc.splitTextToSize(para2, cw);
-  doc.text(lines2, ml, y); y += lines2.length * 3.2 + 4;
-
-  // ── Completed by / Date / Phone ──
-  doc.setFontSize(10); doc.setFont("helvetica", "bold");
-  doc.text(`Completed by: ${completedBy || "________________"}`, ml, y);
-  doc.text(`Date: ${formDate || "_________"}`, ml + 80, y);
-  doc.text(`Phone Number: ${settings.phone || "__________"}`, ml + 130, y);
-  if (poInfo) { doc.setFontSize(7); doc.setFont("helvetica", "normal"); doc.text(`PO: ${poInfo.pbsPO}  GM#: ${poInfo.gmControl}`, pw - mr, y, { align: "right" }); }
+  // ── Header text ──
+  y = 12;
+  doc.setFontSize(16); doc.setFont("helvetica", "bold");
+  doc.text("General Motors of Canada Ltd.", pw / 2 + 10, y, { align: "center" });
+  y += 6;
+  doc.setFontSize(12); doc.setFont("helvetica", "bold");
+  doc.text("National Parts Distribution Center", pw / 2, y, { align: "center" });
+  y += 5;
+  doc.text("Woodstock, Ontario", pw / 2, y, { align: "center" });
+  y += 5;
+  doc.text("Your Satisfaction Is Our Goal!", pw / 2, y, { align: "center" });
   y += 7;
 
-  // ── Table styling ──
-  const tOpts = {
-    theme: "grid",
-    headStyles: { fillColor: [255, 255, 255], textColor: [0, 0, 0], fontStyle: "bold", fontSize: 8, cellPadding: 1.5, halign: "center" },
-    bodyStyles: { fontSize: 8, cellPadding: 1.5, minCellHeight: 5, textColor: [0, 0, 0] },
-    styles: { lineColor: [0, 0, 0], lineWidth: 0.3, font: "helvetica" },
-    margin: { left: ml, right: mr }
+  // ── Area / Station / Dealer info line ──
+  doc.setFontSize(11); doc.setFont("helvetica", "bold");
+  const areaLine = `Area:  ${settings.area || "80"}     Station No.:        ${settings.station || "587"}           Dealer Name:             ${settings.dealerName || ""}          Dealer Code: ${settings.dealerCode || ""}`;
+  doc.text(areaLine, ml, y);
+  y += 6;
+
+  // ── "It was a pleasure..." (bold, NOT italic) ──
+  doc.setFontSize(12); doc.setFont("helvetica", "bold");
+  doc.text("It was a pleasure to pack your order.  Your satisfaction is our goal!", ml, y);
+  y += 7;
+
+  // ── Paragraph 1: mixed normal + bold ──
+  doc.setFontSize(10); doc.setFont("helvetica", "normal");
+  const p1a = "In order to improve the quality of your shipment, we ask that you complete this sheet when you receive";
+  const p1aLines = doc.splitTextToSize(p1a, cw);
+  doc.text(p1aLines, ml, y);
+  // Calculate where "your order." ends to start bold text
+  y += p1aLines.length * 4;
+  doc.setFont("helvetica", "normal");
+  const p1b = "your order.  ";
+  doc.text(p1b, ml, y);
+  const p1bW = doc.getTextWidth(p1b);
+  doc.setFont("helvetica", "bold");
+  const p1c = "This will allow us to start the investigation on any missing parts shipped out of";
+  doc.text(p1c, ml + p1bW, y);
+  y += 4;
+  doc.text("Woodstock.", ml, y);
+  y += 6;
+
+  // ── "If you receive an overage..." (bold) ──
+  doc.setFontSize(10); doc.setFont("helvetica", "bold");
+  doc.text("If you receive an overage or wrong part, please claim on Parts Workbench.", ml, y);
+  y += 6;
+
+  // ── Warning paragraph with mixed bold+underline ──
+  doc.setFontSize(9); doc.setFont("helvetica", "normal");
+  let cx = ml;
+  const writeText = (text, bold, underline) => {
+    doc.setFont("helvetica", bold ? "bold" : "normal");
+    // Handle word wrapping manually for mixed formatting
+    const words = text.split(" ");
+    for (let i = 0; i < words.length; i++) {
+      const word = (i < words.length - 1) ? words[i] + " " : words[i];
+      const ww = doc.getTextWidth(word);
+      if (cx + ww > pw - mr) { cx = ml; y += 3.8; }
+      doc.text(word, cx, y);
+      if (underline) {
+        const sz = doc.getFontSize();
+        doc.setLineWidth(0.25);
+        doc.line(cx, y + 0.5, cx + ww - (i < words.length - 1 ? doc.getTextWidth(" ") * 0.3 : 0), y + 0.5);
+      }
+      cx += ww;
+    }
   };
 
-  // ── SHORT INFO table ──
-  doc.setFontSize(9); doc.setFont("helvetica", "bold");
-  // Merged header row "SHORT INFO"
+  writeText("All parts received in a non-returnable condition must be reported within ", false, false);
+  writeText("24 hours", true, true);
+  writeText(" of receiving and ", false, false);
+  writeText("claimed as damaged on Parts Workbench", true, true);
+  writeText(". These parts will be accepted without penalty to your dealership. ", false, false);
+  writeText("If you submit a return on a part in a non-returnable condition or has carrier caused damage that has not been reported within the 24 hours it will be refused.", true, true);
+  y += 7; cx = ml;
+
+  // ── Completed by / Date / Phone ──
+  doc.setFontSize(12); doc.setFont("helvetica", "bold");
+  doc.text(`Completed by: ${completedBy || "________________"}`, ml, y);
+  doc.text(`Date: ${formDate || "_________"}`, ml + 75, y);
+  doc.text(`Phone Number: ${settings.phone || "__________"}`, ml + 120, y);
+  if (poInfo) { doc.setFontSize(7); doc.setFont("helvetica", "normal"); doc.text(`PO: ${poInfo.pbsPO}  GM#: ${poInfo.gmControl}`, pw - mr, y + 4, { align: "right" }); }
+  y += 8;
+
+  // ── Table styling (white header bg, black grid) ──
+  const tOpts = {
+    theme: "grid",
+    headStyles: { fillColor: [255, 255, 255], textColor: [0, 0, 0], fontStyle: "bold", fontSize: 9, cellPadding: 1.5, halign: "center" },
+    bodyStyles: { fontSize: 9, cellPadding: 1.5, minCellHeight: 6, textColor: [0, 0, 0] },
+    styles: { lineColor: [0, 0, 0], lineWidth: 0.3, font: "helvetica" },
+    margin: { left: ml, right: mr },
+    tableLineColor: [0, 0, 0], tableLineWidth: 0.3
+  };
+
+  // ── SHORT INFO table (always shown) ──
   doc.autoTable({
     startY: y, ...tOpts,
     head: [
-      [{ content: "SHORT INFO", colSpan: 6, styles: { halign: "center", fontStyle: "bold", fontSize: 9 } }],
-      ["Item #", "Part #", "SO #", "QTY ordered", "QTY Received", "Tote or Pallet ?"]
+      [{ content: "SHORT INFO", colSpan: 6, styles: { halign: "center", fontStyle: "normal", fontSize: 10 } }],
+      ["Item #", "Part #", "SO #", "QTY\nordered", "QTY\nReceived", "Tote or\nPallet ?"]
     ],
+    headStyles: { ...tOpts.headStyles, fontSize: 9, cellPadding: 1.2 },
     body: [
       ...shortItems.map((r, i) => [String(i + 1), r.partNumber, r.shippingOrder, String(r.expectedQty), String(r.scannedQty), ""]),
       ...Array(Math.max(0, 4 - shortItems.length)).fill(["", "", "", "", "", ""])
     ],
-    columnStyles: { 0: { cellWidth: 16 }, 3: { cellWidth: 22, halign: "center" }, 4: { cellWidth: 22, halign: "center" }, 5: { cellWidth: 28, halign: "center" } }
+    columnStyles: {
+      0: { cellWidth: 18, halign: "center" },
+      1: { cellWidth: 42 },
+      2: { cellWidth: 42 },
+      3: { cellWidth: 22, halign: "center" },
+      4: { cellWidth: 22, halign: "center" },
+      5: { cellWidth: 24, halign: "center" }
+    }
   });
   y = doc.lastAutoTable.finalY + 4;
 
-  // ── DIPP section ──
-  doc.setFontSize(9); doc.setFont("helvetica", "bold");
-  const dippTitle = "DIPP label Request \u2013  parts received with package damage/carrier damage or non-returnable condition";
-  doc.text(dippTitle, ml, y); y += 1;
-  // Underline
-  const dippTitleWidth = doc.getTextWidth(dippTitle);
-  doc.setLineWidth(0.3); doc.line(ml, y, ml + dippTitleWidth, y); y += 2;
+  // ── DIPP section title (bold + underlined text) ──
+  doc.setFontSize(10); doc.setFont("helvetica", "bold");
+  const dippTitle = "DIPP label Request \u2013  parts received with package damage/carrier damage or non-returnable";
+  doc.text(dippTitle, ml, y);
+  let dtw = doc.getTextWidth(dippTitle);
+  doc.setLineWidth(0.25); doc.line(ml, y + 0.6, ml + dtw, y + 0.6);
+  y += 4;
+  const dippTitle2 = "condition";
+  doc.text(dippTitle2, ml, y);
+  const dtw2 = doc.getTextWidth(dippTitle2);
+  doc.line(ml, y + 0.6, ml + dtw2, y + 0.6);
+  y += 2;
 
+  // ── DIPP table ──
   doc.autoTable({
     startY: y, ...tOpts,
     head: [["Part #", "PDC", "SO #", "Description", "Comments- i.e \u2013\nbox damaged,\nopen package", "DIPP\nrequested\n(Y/N)"]],
-    headStyles: { ...tOpts.headStyles, fontSize: 7, cellPadding: 1.2 },
+    headStyles: { ...tOpts.headStyles, fontSize: 8, cellPadding: 1.2 },
     body: [
       ...dippItems.map(item => [item.partNumber, item.pdc, item.shippingOrder, dippDescriptions[item.id] || "", dippComments[item.id] || "", "Y"]),
       ...Array(Math.max(0, 3 - dippItems.length)).fill(["", "", "", "", "", ""])
     ],
-    columnStyles: { 0: { cellWidth: 30 }, 1: { cellWidth: 18 }, 2: { cellWidth: 24 }, 3: { cellWidth: 38 }, 4: { cellWidth: 48 }, 5: { cellWidth: 22, halign: "center" } }
+    columnStyles: {
+      0: { cellWidth: 28, halign: "center" },
+      1: { cellWidth: 18, halign: "center" },
+      2: { cellWidth: 22, halign: "center" },
+      3: { cellWidth: 38 },
+      4: { cellWidth: 42 },
+      5: { cellWidth: 22, halign: "center" }
+    }
   });
-  y = doc.lastAutoTable.finalY + 6;
+  y = doc.lastAutoTable.finalY + 5;
 
-  // ── Parts Received Belonging to Another Dealership ──
-  doc.setFontSize(12); doc.setFont("helvetica", "bold");
+  // ── Parts Received Belonging to Another Dealership (bold + underlined) ──
+  doc.setFontSize(14); doc.setFont("helvetica", "bold");
   const wdTitle = "Parts Received Belonging to Another Dealership:";
-  doc.text(wdTitle, ml, y); y += 1;
-  const wdTitleWidth = doc.getTextWidth(wdTitle);
-  doc.setLineWidth(0.3); doc.line(ml, y, ml + wdTitleWidth, y); y += 2;
+  doc.text(wdTitle, ml, y);
+  const wdtw = doc.getTextWidth(wdTitle);
+  doc.setLineWidth(0.3); doc.line(ml, y + 0.7, ml + wdtw, y + 0.7);
+  y += 2;
 
+  // ── Wrong dealer table ──
   doc.autoTable({
     startY: y, ...tOpts,
     head: [["Part #", "Dealer Code", "SO #", "Did you contact\nthe dealer", "Do you require us\nto redirect the\npart?"]],
-    headStyles: { ...tOpts.headStyles, fontSize: 7, cellPadding: 1.2 },
+    headStyles: { ...tOpts.headStyles, fontSize: 8, cellPadding: 1.2 },
     body: [
       ...wrongDealerItems.map(item => [item.partNumber, item.dealerCode, item.shippingOrder, "", ""]),
       ...Array(Math.max(0, 2 - wrongDealerItems.length)).fill(["", "", "", "", ""])
     ],
-    columnStyles: { 0: { cellWidth: 34 }, 1: { cellWidth: 34 }, 2: { cellWidth: 34 }, 3: { cellWidth: 40, halign: "center" }, 4: { cellWidth: 40, halign: "center" } }
+    columnStyles: {
+      0: { cellWidth: 30, halign: "center" },
+      1: { cellWidth: 34, halign: "center" },
+      2: { cellWidth: 30, halign: "center" },
+      3: { cellWidth: 38, halign: "center" },
+      4: { cellWidth: 38, halign: "center" }
+    }
   });
-  y = doc.lastAutoTable.finalY + 8;
+  y = doc.lastAutoTable.finalY + 6;
 
-  // ── Footer ──
-  doc.setFontSize(10); doc.setFont("helvetica", "bold");
-  const footY = Math.max(y + 4, ph - 25);
+  // ── Footer (always at bottom) ──
+  doc.setFontSize(11); doc.setFont("helvetica", "bold");
+  const footY = Math.max(y + 4, ph - 24);
   doc.text("RETURN BY FAX TO (519) 421-4766 or EMAIL wdk.courtesy@gm.com", pw / 2, footY, { align: "center" });
   doc.text("Dealer Fax Desk Phone (519) 421-4728", pw / 2, footY + 5, { align: "center" });
 
