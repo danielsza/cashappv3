@@ -139,8 +139,8 @@ async function generateWoodstockPDF({ settings, shortItems, dippItems, dippComme
   }
 
   // === SHORT INFO TABLE ===
-  const sCols = [29.0, 95.7, 251.0, 373.1, 435.2, 501.3, 567.8];
-  const sRows = [375.9, 400.1, 421.1, 443.2, 470.4];
+  const sCols = [28.3, 95.6, 251.1, 373.1, 435.2, 501.2, 567.7];
+  const sRows = [362.2, 386.9, 408.5, 431.0, 458.8];
   for (let r = 0; r < Math.min(shortItems.length, 4); r++) {
     const item = shortItems[r];
     drawInCell(String(r + 1), sCols[0], sRows[r], sCols[1], sRows[r + 1]);
@@ -152,8 +152,8 @@ async function generateWoodstockPDF({ settings, shortItems, dippItems, dippComme
   }
 
   // === DIPP TABLE ===
-  const dCols = [36.3, 132.5, 184.2, 258.3, 373.1, 482.5, 577.7];
-  const dRows = [557.5, 579.1, 600.6];
+  const dCols = [36.2, 132.5, 184.2, 258.2, 373.1, 482.5, 577.7];
+  const dRows = [536.9, 559.0, 581.0];
   for (let r = 0; r < Math.min(dippItems.length, 2); r++) {
     const item = dippItems[r];
     drawInCell(item.partNumber, dCols[0], dRows[r], dCols[1], dRows[r + 1], { size: 8 });
@@ -165,9 +165,9 @@ async function generateWoodstockPDF({ settings, shortItems, dippItems, dippComme
   }
 
   // === WRONG DEALER TABLE ===
-  const wCols = [36.3, 143.5, 251.0, 357.9, 465.2, 572.5];
-  const wRows = [675.8, 700.0];
-  for (let r = 0; r < Math.min(wrongDealerItems.length, 1); r++) {
+  const wCols = [36.2, 143.4, 251.1, 357.8, 465.1, 572.4];
+  const wRows = [652.4, 677.0, 703.0];
+  for (let r = 0; r < Math.min(wrongDealerItems.length, 2); r++) {
     const item = wrongDealerItems[r];
     drawInCell(item.partNumber, wCols[0], wRows[r], wCols[1], wRows[r + 1], { size: 8 });
     drawInCell(item.dealerCode, wCols[1], wRows[r], wCols[2], wRows[r + 1], { size: 8 });
@@ -177,14 +177,16 @@ async function generateWoodstockPDF({ settings, shortItems, dippItems, dippComme
   }
 
   // === COMPLETED BY / DATE / PHONE ===
+  // Underscores: completedBy x=126.5-248.7, date x=306-374.9, phone x=492.9-569.4
+  // Baseline y top=288.1, bottom=300.1 (pdfplumber coords)
   if (completedBy) {
-    page.drawText(completedBy, { x: 136, y: toY(309), size: 10, font: fontBold, color: rgb(0, 0, 0) });
+    page.drawText(completedBy, { x: 128, y: toY(298), size: 10, font: fontBold, color: rgb(0, 0, 0) });
   }
   if (formDate) {
-    page.drawText(formDate, { x: 312, y: toY(309), size: 10, font: fontBold, color: rgb(0, 0, 0) });
+    page.drawText(formDate, { x: 308, y: toY(298), size: 10, font: fontBold, color: rgb(0, 0, 0) });
   }
   if (settings.phone) {
-    page.drawText(settings.phone, { x: 490, y: toY(309), size: 10, font: fontBold, color: rgb(0, 0, 0) });
+    page.drawText(settings.phone, { x: 494, y: toY(298), size: 10, font: fontBold, color: rgb(0, 0, 0) });
   }
 
   return pdfDoc;
