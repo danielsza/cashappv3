@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import * as XLSX from "xlsx";
+import ExcelJS from "exceljs";
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 import { WOODSTOCK_TEMPLATE_B64 } from "./woodstockTemplate.js";
 
@@ -205,6 +206,123 @@ function buildEML({ to, cc, subject, bodyText, pdfBase64, pdfFilename }) {
 function buildSubjectParts(si, di, wi) { const p = []; if (di.length) p.push("DIPP"); if (si.length) p.push("Did Not Receive"); if (wi.length) p.push("Parts for Another Dealer"); return p; }
 function buildSubject(parts, dc, po) { return `${parts.length ? parts.join(" / ") : "Woodstock Form"} - ${dc}${po ? ` - ${po.gmControl || po.pbsPO}` : ""}`; }
 
+// ─── Pink Sheet Generator ───────────────────────────────────────
+async function generatePinkSheet(purchaseOrders, activePO) {
+  const wb = new ExcelJS.Workbook();
+  const pinkFill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFF80FF" } };
+  const boldFont = { bold: true, size: 11, name: "Arial" };
+  const normalFont = { size: 10, name: "Arial" };
+  const headerFont = { bold: true, size: 10, name: "Arial" };
+  const titleFont = { bold: true, size: 14, name: "Arial", underline: true };
+
+  const pos = activePO === "__all__" ? purchaseOrders : purchaseOrders.filter(p => p.pbsPO === activePO);
+  if (!pos.length) return null;
+
+  for (const po of pos) {
+    const allRows = po.data;
+    const shipNums = [...new Set(allRows.filter(r => r.status === "Shipped" && r.shipmentNo).map(r => r.shipmentNo))].sort();
+    if (!shipNums.length) { shipNums.push("none"); }
+
+    for (const shipNo of shipNums) {
+      const sheetName = `${po.pbsPO}_${shipNo}`.substring(0, 31);
+      const ws = wb.addWorksheet(sheetName);
+      ws.pageSetup = { orientation: "landscape", paperSize: 1, fitToPage: true, fitToWidth: 1, fitToHeight: 0 };
+
+      // PO# and Shipping Order#
+      ws.getCell("A1").value = po.pbsPO;
+      ws.getCell("A1").font = titleFont;
+      ws.getCell("A1").alignment = { horizontal: "right" };
+      ws.getCell("A2").value = shipNo !== "none" ? Number(shipNo) || shipNo : "";
+      ws.getCell("A2").font = titleFont;
+      ws.getCell("A2").alignment = { horizontal: "right" };
+
+      // Blank row 3, 4
+      // Header row 5
+      const headers = ["Current Status", "Line Item No.", "Part No. Ordered", "Part No. Processed", "Facility", "Qty Ordered", "Qty Proc.", "Shipment No."];
+      const hRow = ws.getRow(5);
+      headers.forEach((h, i) => {
+        const cell = hRow.getCell(i + 1);
+        cell.value = h;
+        cell.font = headerFont;
+      });
+
+      // Separate non-shipped vs shipped for this shipping order
+      const nonShipped = allRows.filter(r => r.status !== "Shipped").sort((a, b) => a.partOrdered.localeCompare(b.partOrdered));
+      const shipped = allRows.filter(r => r.status === "Shipped" && r.shipmentNo === shipNo).sort((a, b) => a.partProcessed.localeCompare(b.partProcessed));
+
+      // Skip if nothing
+      let row = 6;
+
+      // Write non-shipped rows (Written, Backordered, etc.)
+      for (const r of nonShipped) {
+        const dr = ws.getRow(row);
+        dr.getCell(1).value = r.status;
+        dr.getCell(2).value = "";
+        dr.getCell(3).value = r.partOrdered;
+        dr.getCell(4).value = r.partProcessed;
+        dr.getCell(5).value = r.facility;
+        dr.getCell(6).value = r.qtyOrdered;
+        dr.getCell(7).value = r.qtyProc;
+        dr.getCell(8).value = r.shipmentNo || "";
+        for (let c = 1; c <= 8; c++) dr.getCell(c).font = normalFont;
+        // Supersession highlight
+        if (r.partOrdered && r.partProcessed && r.partOrdered !== r.partProcessed) {
+          dr.getCell(4).fill = pinkFill;
+          dr.getCell(4).font = { ...normalFont, bold: true };
+        }
+        row++;
+      }
+
+      // Thick separator line
+      if (nonShipped.length > 0 && shipped.length > 0) {
+        const sepRow = row - 1;
+        for (let c = 1; c <= 8; c++) {
+          ws.getRow(sepRow).getCell(c).border = {
+            ...ws.getRow(sepRow).getCell(c).border,
+            bottom: { style: "thick" }
+          };
+        }
+      } else if (nonShipped.length === 0 && shipped.length > 0) {
+        // no separator needed
+      }
+
+      // Write shipped rows
+      for (const r of shipped) {
+        const dr = ws.getRow(row);
+        dr.getCell(1).value = r.status;
+        dr.getCell(2).value = "";
+        dr.getCell(3).value = r.partOrdered;
+        dr.getCell(4).value = r.partProcessed;
+        dr.getCell(5).value = r.facility;
+        dr.getCell(6).value = r.qtyOrdered;
+        dr.getCell(7).value = r.qtyProc;
+        dr.getCell(8).value = r.shipmentNo || "";
+        for (let c = 1; c <= 8; c++) dr.getCell(c).font = normalFont;
+        // Supersession highlight
+        if (r.partOrdered && r.partProcessed && r.partOrdered !== r.partProcessed) {
+          dr.getCell(4).fill = pinkFill;
+          dr.getCell(4).font = { ...normalFont, bold: true };
+        }
+        // Qty difference highlight
+        if (r.qtyOrdered !== r.qtyProc) {
+          dr.getCell(7).fill = pinkFill;
+          dr.getCell(7).font = { ...normalFont, bold: true };
+        }
+        row++;
+      }
+
+      // Auto-fit columns
+      ws.columns = [
+        { width: 14 }, { width: 12 }, { width: 16 }, { width: 16 },
+        { width: 10 }, { width: 12 }, { width: 10 }, { width: 14 }
+      ];
+    }
+  }
+
+  const buffer = await wb.xlsx.writeBuffer();
+  return new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+}
+
 // ─── Theme ───────────────────────────────────────────────────────
 function makeTheme(m) {
   const d = m === "dark";
@@ -395,6 +513,7 @@ export default function App() {
   const generatePDFHandler = async () => { setPdfGenerating(true); try { const pdfDoc = await generateWoodstockPDF({ settings, shortItems, dippItems: getDipp(), dippComments, dippDescriptions, wrongDealerItems: getWD(), completedBy, formDate, poInfo, toteChoices, wdContact, wdRedirect }); const pdfBytes = await pdfDoc.save(); const fn = `woodstock_form_${poInfo ? `${poInfo.pbsPO}_${poInfo.gmControl}` : "form"}_${formDate}.pdf`; const blob = new Blob([pdfBytes], { type: "application/pdf" }); setLastPdfBlob(blob); const b64 = btoa(pdfBytes.reduce((d, b) => d + String.fromCharCode(b), "")); setLastPdfBase64(b64); setLastPdfName(fn); const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = fn; a.click(); URL.revokeObjectURL(url); showFB("✓ PDF generated", t.green); } catch (err) { showFB(`PDF error: ${err.message}`, t.red); } setPdfGenerating(false); };
   const printPDF = () => { if (!lastPdfBlob) return; const w = window.open(URL.createObjectURL(lastPdfBlob)); if (w) w.addEventListener("load", () => setTimeout(() => w.print(), 500)); };
   const emailOutlook = () => { if (!lastPdfBase64) return; const body = `Please find the attached Woodstock form for dealer ${settings.dealerCode} (${settings.dealerName}).\n\nDate: ${formDate}\nCompleted by: ${completedBy || "(not specified)"}\nPhone: ${settings.phone}${poInfo ? `\nPO: ${poInfo.pbsPO} / GM Control: ${poInfo.gmControl}` : ""}\n\nSummary:\n${shortItems.length ? `- ${shortItems.length} short\n` : ""}${getDipp().length ? `- ${getDipp().length} DIPP\n` : ""}${getWD().length ? `- ${getWD().length} wrong dealer\n` : ""}`; const eml = buildEML({ to: settings.wdkEmail, cc: getCCStr(), subject: emailSubject, bodyText: body, pdfBase64: lastPdfBase64, pdfFilename: lastPdfName }); const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([eml], { type: "message/rfc822" })); a.download = `woodstock_${formDate}.eml`; document.body.appendChild(a); a.click(); document.body.removeChild(a); showFB("✓ .eml downloaded — open in Outlook", t.green); };
+  const downloadPinkSheet = async () => { try { const blob = await generatePinkSheet(purchaseOrders, activePO); if (!blob) { showFB("No PO data to generate pink sheet", t.red); return; } const fn = `pink_sheet_${activePO || "all"}_${formDate}.xlsx`; const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = fn; a.click(); URL.revokeObjectURL(url); showFB(`✓ Pink sheet downloaded: ${fn}`, t.green); } catch (err) { showFB(`Pink sheet error: ${err.message}`, t.red); } };
 
   // ─── Styles ─────────────────────────────────────────────────
   const S = {
@@ -572,7 +691,7 @@ export default function App() {
             {purchaseOrders.length > 0 && <div style={{ padding: "8px 12px", display: "flex", gap: 6, flexWrap: "wrap", borderBottom: `1px solid ${t.border}` }}><button style={{ padding: "5px 10px", background: activePO === "__all__" ? t.accentBg : t.bg3, border: `1px solid ${activePO === "__all__" ? t.accent : t.border}`, borderRadius: 4, cursor: "pointer", fontSize: 11, color: activePO === "__all__" ? t.accentText : t.textMuted, fontFamily: ff }} onClick={() => setActivePO("__all__")}>All</button>{purchaseOrders.map(po => <button key={po.id} style={{ padding: "5px 10px", background: activePO === po.pbsPO ? t.accentBg : t.bg3, border: `1px solid ${activePO === po.pbsPO ? t.accent : t.border}`, borderRadius: 4, cursor: "pointer", fontSize: 11, color: activePO === po.pbsPO ? t.accentText : t.textMuted, fontFamily: ff, display: "flex", alignItems: "center", gap: 6 }} onClick={() => setActivePO(po.pbsPO)}><strong>{po.pbsPO}</strong>{po.gmControl && ` · ${po.gmControl}`}<span style={S.sm("transparent", t.textFaint)} onClick={e => { e.stopPropagation(); removePO(po.id); }}>✕</span></button>)}</div>}
             <details style={{ borderTop: `1px solid ${t.border}` }}><summary style={{ padding: "8px 12px", cursor: "pointer", fontSize: 11, color: t.textMuted }}>Paste CSV</summary><div style={{ padding: 12 }}><input style={S.inp} value={csvPO} onChange={e => setCsvPO(e.target.value)} placeholder="PO Name" /><textarea style={{ width: "100%", padding: 10, background: t.bgInput, border: `1px solid ${t.border}`, borderRadius: 4, color: t.text, fontFamily: ff, fontSize: 12, minHeight: 80, resize: "vertical", boxSizing: "border-box", marginTop: 6 }} value={csvText} onChange={e => setCsvText(e.target.value)} placeholder="Paste..." /><button style={{ ...S.btn(t.accent, "#fff"), marginTop: 6 }} onClick={handleCSVPaste}>Load</button></div></details>
           </div>
-          {purchaseOrders.length > 0 && (<><div style={{ display: "flex", gap: 8, marginBottom: 10, alignItems: "center" }}><span style={{ fontSize: 10, color: t.textMuted, fontWeight: 600 }}>SHIPMENT:</span><select style={S.sel} value={selectedShipment} onChange={e => setSelectedShipment(e.target.value)}><option value="all">All</option>{getShipNums().map(sn => <option key={sn} value={sn}>{sn}</option>)}</select></div>
+          {purchaseOrders.length > 0 && (<><div style={{ display: "flex", gap: 8, marginBottom: 10, alignItems: "center" }}><span style={{ fontSize: 10, color: t.textMuted, fontWeight: 600 }}>SHIPMENT:</span><select style={S.sel} value={selectedShipment} onChange={e => setSelectedShipment(e.target.value)}><option value="all">All</option>{getShipNums().map(sn => <option key={sn} value={sn}>{sn}</option>)}</select><button style={{ padding: "6px 14px", background: "#e91e90", color: "#fff", border: "none", borderRadius: 6, fontFamily: ff, fontSize: 11, fontWeight: 600, cursor: "pointer", marginLeft: "auto" }} onClick={downloadPinkSheet}>📋 Pink Sheet</button></div>
             <div style={S.card}><div style={S.cH}><span style={S.cL}><span style={{ color: t.greenText }}>{nM}✓</span> · <span style={{ color: t.redText }}>{nS} short</span> · <span style={{ color: t.yellowText }}>{nO} over</span></span></div>
               {comp.length === 0 ? <div style={S.empty}>No results.</div> : <div style={{ overflowX: "auto", maxHeight: 500, overflowY: "auto" }}><table style={S.tbl}><thead><tr><th style={S.th}>Status</th><th style={S.th}>Part #</th><th style={S.th}>SO</th><th style={S.th}>Exp</th><th style={S.th}>Scan</th><th style={S.th}>Diff</th><th style={S.th}>Notes</th></tr></thead><tbody>
                 {comp.map((r, i) => { const c = sc(r.status); return <tr key={i} style={{ background: c.row }}><td style={S.td()}><span style={S.bg(c.bg, c.tx)}>{STATUS_CFG[r.status]?.label}</span></td><td style={S.td(t.textStrong)}><strong>{r.partNumber}</strong>{r.superseded && <div style={{ fontSize: 9, color: t.yellowText }}>↳{r.partOrdered}</div>}</td><td style={S.td()}>{r.shippingOrder}</td><td style={S.td()}>{r.expectedQty}</td><td style={S.td(r.scannedQty !== r.expectedQty ? c.tx : null)}>{r.scannedQty}</td><td style={S.td(r.qtyDiff > 0 ? t.yellowText : r.qtyDiff < 0 ? t.redText : t.greenText)}>{r.qtyDiff > 0 ? "+" : ""}{r.qtyDiff}</td><td style={S.td()}>{r.wrongDealer && <span style={{ ...S.bg(`${t.purple}15`, t.purpleText), marginRight: 3 }}>WD</span>}{r.superseded && <span style={{ ...S.bg(`${t.yellow}15`, t.yellowText), marginRight: 3 }}>SUP</span>}{r.dipp && <span style={S.bg(`${t.blue}15`, t.blueText)}>D</span>}</td></tr>; })}</tbody></table></div>}</div></>)}
