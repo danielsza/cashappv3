@@ -174,6 +174,45 @@ export default function App() {
   useEffect(() => { saveSettingsToStorage(settings); }, [settings]);
   useEffect(() => { saveScans(scannedItems); }, [scannedItems]);
 
+  // ─── Scanner→Workstation Sync ───────────────────────────────
+  const syncVersion = useRef(0);
+  const syncPushTimer = useRef(null);
+
+  // Scanner mode: push scans to server on every change (debounced)
+  useEffect(() => {
+    if (appMode !== "scanner" || scannedItems.length === 0) return;
+    if (syncPushTimer.current) clearTimeout(syncPushTimer.current);
+    syncPushTimer.current = setTimeout(() => {
+      fetch("/api/scans", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ scans: scannedItems }) }).catch(() => {});
+    }, 500);
+    return () => { if (syncPushTimer.current) clearTimeout(syncPushTimer.current); };
+  }, [scannedItems, appMode]);
+
+  // Workstation mode: poll server for scanner updates every 2s
+  useEffect(() => {
+    if (appMode !== "workstation") return;
+    const poll = setInterval(async () => {
+      try {
+        const r = await fetch("/api/version");
+        const d = await r.json();
+        if (d.version > syncVersion.current) {
+          syncVersion.current = d.version;
+          const r2 = await fetch("/api/scans");
+          const d2 = await r2.json();
+          if (d2.scans && d2.scans.length > 0) {
+            setScannedItems(prev => {
+              const existingIds = new Set(prev.map(i => i.id));
+              const newItems = d2.scans.filter(s => !existingIds.has(s.id));
+              if (newItems.length === 0) return prev;
+              return [...prev, ...newItems];
+            });
+          }
+        }
+      } catch (e) {}
+    }, 2000);
+    return () => clearInterval(poll);
+  }, [appMode]);
+
   const showFB = useCallback((msg, color, duration = 4000) => {
     if (feedbackTimer.current) clearTimeout(feedbackTimer.current);
     setLastFeedback({ msg, color });
@@ -399,7 +438,7 @@ export default function App() {
                   </div>
                 </div>); })}
             </div>}
-          {scannedItems.length > 0 && <button style={{ ...S.btn(t.redBg, t.redText), marginTop: 12, width: "100%", padding: "10px" }} onClick={() => { if (confirm("Clear ALL scans?")) setScannedItems([]); }}>Clear All Scans</button>}
+          {scannedItems.length > 0 && <button style={{ ...S.btn(t.redBg, t.redText), marginTop: 12, width: "100%", padding: "10px" }} onClick={() => { if (confirm("Clear ALL scans?")) { setScannedItems([]); fetch("/api/scans", { method: "DELETE" }).catch(() => {}); } }}>Clear All Scans</button>}
         </div>
       </div>
     );
