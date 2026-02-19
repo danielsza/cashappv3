@@ -97,22 +97,134 @@ function parseFilename(name) {
 }
 
 // ─── PDF Generator ───────────────────────────────────────────────
-function generateWoodstockPDF({ settings, shortItems, dippItems, dippComments, wrongDealerItems, completedBy, formDate, poInfo }) {
-  const doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "letter" });
-  const pw = doc.internal.pageSize.getWidth(); let y = 15;
-  doc.setFontSize(14); doc.setFont("helvetica", "bold"); doc.text("General Motors of Canada Ltd.", pw / 2, y, { align: "center" }); y += 6;
-  doc.setFontSize(11); doc.setFont("helvetica", "normal"); doc.text("National Parts Distribution Center", pw / 2, y, { align: "center" }); y += 5; doc.text("Woodstock, Ontario", pw / 2, y, { align: "center" }); y += 5;
-  doc.setFontSize(10); doc.setFont("helvetica", "italic"); doc.text("Your Satisfaction Is Our Goal!", pw / 2, y, { align: "center" }); y += 8;
-  doc.setFont("helvetica", "normal"); doc.setFontSize(9); doc.text(`Area: ${settings.area}     Station No.: ${settings.station}          Dealer Name: ${settings.dealerName}          Dealer Code: ${settings.dealerCode}`, 15, y); y += 6;
-  doc.setFontSize(8); doc.text("It was a pleasure to pack your order. Your satisfaction is our goal!", 15, y); y += 4; doc.text("In order to improve the quality of your shipment, we ask that you complete this sheet when you receive your order.", 15, y); y += 4; doc.text("This will allow us to start the investigation on any missing parts shipped out of Woodstock.", 15, y); y += 5; doc.text("If you receive an overage or wrong part, please claim on Parts Workbench.", 15, y); y += 5;
-  doc.setFontSize(7); const note = "All parts received in a non-returnable condition must be reported within 24 hours of receiving and claimed as damaged on Parts Workbench. These parts will be accepted without penalty to your dealership. If you submit a return on a part in a non-returnable condition or has carrier caused damage that has not been reported within the 24 hours it will be refused."; const sn = doc.splitTextToSize(note, pw - 30); doc.text(sn, 15, y); y += sn.length * 3.5 + 3;
-  doc.setFontSize(9); doc.setFont("helvetica", "normal"); doc.text(`Completed by: ${completedBy || "________________"}          Date: ${formDate}          Phone Number: ${settings.phone}`, 15, y); if (poInfo) doc.text(`PO: ${poInfo.pbsPO}    GM Control#: ${poInfo.gmControl}`, pw - 15, y, { align: "right" }); y += 8;
-  const tOpts = { theme: "grid", headStyles: { fillColor: [240, 240, 240], textColor: [0, 0, 0], fontStyle: "bold", fontSize: 8, cellPadding: 2 }, bodyStyles: { fontSize: 8, cellPadding: 2, minCellHeight: 6, textColor: [0, 0, 0] }, styles: { lineColor: [0, 0, 0], lineWidth: 0.3 } };
-  if (shortItems.length > 0) { doc.setFontSize(10); doc.setFont("helvetica", "bold"); doc.text("SHORT INFO", 15, y); y += 2; doc.autoTable({ startY: y, margin: { left: 15, right: 15 }, head: [["Item #", "Part #", "SO #", "QTY Ordered", "QTY Received", "Tote or Pallet ?"]], body: [...shortItems.map((r, i) => [String(i + 1), r.partNumber, r.shippingOrder, String(r.expectedQty), String(r.scannedQty), ""]), ...Array(Math.max(0, 5 - shortItems.length)).fill(["", "", "", "", "", ""])], ...tOpts }); y = doc.lastAutoTable.finalY + 6; }
-  doc.setFontSize(10); doc.setFont("helvetica", "bold"); doc.text("DIPP label Request \u2013 parts received with package damage/carrier damage or non-returnable condition", 15, y); y += 2;
-  doc.autoTable({ startY: y, margin: { left: 15, right: 15 }, head: [["Part #", "PDC", "SO #", "Description", "Comments", "DIPP requested (Y/N)"]], body: [...dippItems.map(item => [item.partNumber, item.pdc, item.shippingOrder, "", dippComments[item.id] || "", "Y"]), ...Array(Math.max(3, 5 - dippItems.length)).fill(["", "", "", "", "", ""])], ...tOpts }); y = doc.lastAutoTable.finalY + 6;
-  doc.setFontSize(10); doc.setFont("helvetica", "bold"); doc.text("Parts Received Belonging to Another Dealership:", 15, y); y += 2;
-  doc.autoTable({ startY: y, margin: { left: 15, right: 15 }, head: [["Part #", "Dealer Code", "SO #", "Did you contact the dealer", "Do you require us to redirect the part?"]], body: [...wrongDealerItems.map(item => [item.partNumber, item.dealerCode, item.shippingOrder, "", ""]), ...Array(Math.max(2, 4 - wrongDealerItems.length)).fill(["", "", "", "", ""])], ...tOpts });
+function generateWoodstockPDF({ settings, shortItems, dippItems, dippComments, dippDescriptions = {}, wrongDealerItems, completedBy, formDate, poInfo }) {
+  const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "letter" });
+  const pw = doc.internal.pageSize.getWidth();   // 215.9
+  const ph = doc.internal.pageSize.getHeight();   // 279.4
+  const ml = 12, mr = 12;                         // margins
+  const cw = pw - ml - mr;                        // content width
+  let y = 10;
+
+  // ── Outer border ──
+  doc.setDrawColor(0); doc.setLineWidth(0.5);
+  doc.rect(5, 5, pw - 10, ph - 10);
+
+  // ── Header ──
+  doc.setFontSize(14); doc.setFont("helvetica", "bold");
+  doc.text("General Motors of Canada Ltd.", pw / 2, y + 8, { align: "center" });
+  doc.setFontSize(11);
+  doc.text("National Parts Distribution Center", pw / 2, y + 14, { align: "center" });
+  doc.text("Woodstock, Ontario", pw / 2, y + 20, { align: "center" });
+  doc.text("Your Satisfaction Is Our Goal!", pw / 2, y + 26, { align: "center" });
+  y += 32;
+
+  // ── Area / Station / Dealer info line ──
+  doc.setFontSize(10); doc.setFont("helvetica", "bold");
+  doc.text(`Area:  ${settings.area || "80"}`, ml, y);
+  doc.text(`Station No.:`, ml + 30, y);
+  doc.text(`${settings.station || "587"}`, ml + 55, y);
+  doc.text(`Dealer Name:`, ml + 72, y);
+  doc.text(`${settings.dealerName || ""}`, ml + 100, y);
+  doc.text(`Dealer Code: ${settings.dealerCode || ""}`, pw - mr, y, { align: "right" });
+  y += 3;
+  doc.setLineWidth(0.3); doc.line(ml, y, pw - mr, y); y += 5;
+
+  // ── Body text ──
+  doc.setFontSize(10); doc.setFont("helvetica", "bolditalic");
+  doc.text("It was a pleasure to pack your order.  Your satisfaction is our goal!", ml, y); y += 6;
+
+  doc.setFontSize(8); doc.setFont("helvetica", "normal");
+  const para1 = "In order to improve the quality of your shipment, we ask that you complete this sheet when you receive your order.  This will allow us to start the investigation on any missing parts shipped out of Woodstock.";
+  const lines1 = doc.splitTextToSize(para1, cw);
+  doc.text(lines1, ml, y); y += lines1.length * 3.5 + 2;
+
+  doc.setFont("helvetica", "bold");
+  doc.text("If you receive an overage or wrong part, please claim on Parts Workbench.", ml, y); y += 5;
+
+  doc.setFont("helvetica", "normal"); doc.setFontSize(7.5);
+  const para2 = "All parts received in a non-returnable condition must be reported within 24 hours of receiving and claimed as damaged on Parts Workbench. These parts will be accepted without penalty to your dealership. If you submit a return on a part in a non-returnable condition or has carrier caused damage that has not been reported within the 24 hours it will be refused.";
+  const lines2 = doc.splitTextToSize(para2, cw);
+  doc.text(lines2, ml, y); y += lines2.length * 3.2 + 4;
+
+  // ── Completed by / Date / Phone ──
+  doc.setFontSize(10); doc.setFont("helvetica", "bold");
+  doc.text(`Completed by: ${completedBy || "________________"}`, ml, y);
+  doc.text(`Date: ${formDate || "_________"}`, ml + 80, y);
+  doc.text(`Phone Number: ${settings.phone || "__________"}`, ml + 130, y);
+  if (poInfo) { doc.setFontSize(7); doc.setFont("helvetica", "normal"); doc.text(`PO: ${poInfo.pbsPO}  GM#: ${poInfo.gmControl}`, pw - mr, y, { align: "right" }); }
+  y += 7;
+
+  // ── Table styling ──
+  const tOpts = {
+    theme: "grid",
+    headStyles: { fillColor: [255, 255, 255], textColor: [0, 0, 0], fontStyle: "bold", fontSize: 8, cellPadding: 1.5, halign: "center" },
+    bodyStyles: { fontSize: 8, cellPadding: 1.5, minCellHeight: 5, textColor: [0, 0, 0] },
+    styles: { lineColor: [0, 0, 0], lineWidth: 0.3, font: "helvetica" },
+    margin: { left: ml, right: mr }
+  };
+
+  // ── SHORT INFO table ──
+  doc.setFontSize(9); doc.setFont("helvetica", "bold");
+  // Merged header row "SHORT INFO"
+  doc.autoTable({
+    startY: y, ...tOpts,
+    head: [
+      [{ content: "SHORT INFO", colSpan: 6, styles: { halign: "center", fontStyle: "bold", fontSize: 9 } }],
+      ["Item #", "Part #", "SO #", "QTY ordered", "QTY Received", "Tote or Pallet ?"]
+    ],
+    body: [
+      ...shortItems.map((r, i) => [String(i + 1), r.partNumber, r.shippingOrder, String(r.expectedQty), String(r.scannedQty), ""]),
+      ...Array(Math.max(0, 4 - shortItems.length)).fill(["", "", "", "", "", ""])
+    ],
+    columnStyles: { 0: { cellWidth: 16 }, 3: { cellWidth: 22, halign: "center" }, 4: { cellWidth: 22, halign: "center" }, 5: { cellWidth: 28, halign: "center" } }
+  });
+  y = doc.lastAutoTable.finalY + 4;
+
+  // ── DIPP section ──
+  doc.setFontSize(9); doc.setFont("helvetica", "bold");
+  const dippTitle = "DIPP label Request \u2013  parts received with package damage/carrier damage or non-returnable condition";
+  doc.text(dippTitle, ml, y); y += 1;
+  // Underline
+  const dippTitleWidth = doc.getTextWidth(dippTitle);
+  doc.setLineWidth(0.3); doc.line(ml, y, ml + dippTitleWidth, y); y += 2;
+
+  doc.autoTable({
+    startY: y, ...tOpts,
+    head: [["Part #", "PDC", "SO #", "Description", "Comments- i.e \u2013\nbox damaged,\nopen package", "DIPP\nrequested\n(Y/N)"]],
+    headStyles: { ...tOpts.headStyles, fontSize: 7, cellPadding: 1.2 },
+    body: [
+      ...dippItems.map(item => [item.partNumber, item.pdc, item.shippingOrder, dippDescriptions[item.id] || "", dippComments[item.id] || "", "Y"]),
+      ...Array(Math.max(0, 3 - dippItems.length)).fill(["", "", "", "", "", ""])
+    ],
+    columnStyles: { 0: { cellWidth: 30 }, 1: { cellWidth: 18 }, 2: { cellWidth: 24 }, 3: { cellWidth: 38 }, 4: { cellWidth: 48 }, 5: { cellWidth: 22, halign: "center" } }
+  });
+  y = doc.lastAutoTable.finalY + 6;
+
+  // ── Parts Received Belonging to Another Dealership ──
+  doc.setFontSize(12); doc.setFont("helvetica", "bold");
+  const wdTitle = "Parts Received Belonging to Another Dealership:";
+  doc.text(wdTitle, ml, y); y += 1;
+  const wdTitleWidth = doc.getTextWidth(wdTitle);
+  doc.setLineWidth(0.3); doc.line(ml, y, ml + wdTitleWidth, y); y += 2;
+
+  doc.autoTable({
+    startY: y, ...tOpts,
+    head: [["Part #", "Dealer Code", "SO #", "Did you contact\nthe dealer", "Do you require us\nto redirect the\npart?"]],
+    headStyles: { ...tOpts.headStyles, fontSize: 7, cellPadding: 1.2 },
+    body: [
+      ...wrongDealerItems.map(item => [item.partNumber, item.dealerCode, item.shippingOrder, "", ""]),
+      ...Array(Math.max(0, 2 - wrongDealerItems.length)).fill(["", "", "", "", ""])
+    ],
+    columnStyles: { 0: { cellWidth: 34 }, 1: { cellWidth: 34 }, 2: { cellWidth: 34 }, 3: { cellWidth: 40, halign: "center" }, 4: { cellWidth: 40, halign: "center" } }
+  });
+  y = doc.lastAutoTable.finalY + 8;
+
+  // ── Footer ──
+  doc.setFontSize(10); doc.setFont("helvetica", "bold");
+  const footY = Math.max(y + 4, ph - 25);
+  doc.text("RETURN BY FAX TO (519) 421-4766 or EMAIL wdk.courtesy@gm.com", pw / 2, footY, { align: "center" });
+  doc.text("Dealer Fax Desk Phone (519) 421-4728", pw / 2, footY + 5, { align: "center" });
+
   return doc;
 }
 
@@ -159,6 +271,7 @@ export default function App() {
   const [activePO, setActivePO] = useState(null);
   const [selectedShipment, setSelectedShipment] = useState("all");
   const [dippComments, setDippComments] = useState({});
+  const [dippDescriptions, setDippDescriptions] = useState({});
   const [completedBy, setCompletedBy] = useState("");
   const [formDate, setFormDate] = useState(new Date().toISOString().split("T")[0]);
   const [pdfGenerating, setPdfGenerating] = useState(false);
@@ -308,7 +421,7 @@ export default function App() {
   const emailSubject = buildSubject(subParts, settings.dealerCode, poInfo);
   const getCCStr = () => { const codes = [...new Set(getWD().map(i => i.dealerCode))]; return codes.map(c => lookupDealer(c)).filter(d => d?.email).map(d => `${d.contact ? `"${d.contact}" ` : ""}<${d.email}>`).join(", "); };
 
-  const generatePDFHandler = async () => { setPdfGenerating(true); try { const doc = generateWoodstockPDF({ settings, shortItems, dippItems: getDipp(), dippComments, wrongDealerItems: getWD(), completedBy, formDate, poInfo }); const fn = `woodstock_form_${poInfo ? `${poInfo.pbsPO}_${poInfo.gmControl}` : "form"}_${formDate}.pdf`; setLastPdfBlob(doc.output("blob")); setLastPdfBase64(doc.output("datauristring").split(",")[1]); setLastPdfName(fn); doc.save(fn); showFB("✓ PDF generated", t.green); } catch (err) { showFB(`PDF error: ${err.message}`, t.red); } setPdfGenerating(false); };
+  const generatePDFHandler = async () => { setPdfGenerating(true); try { const doc = generateWoodstockPDF({ settings, shortItems, dippItems: getDipp(), dippComments, dippDescriptions, wrongDealerItems: getWD(), completedBy, formDate, poInfo }); const fn = `woodstock_form_${poInfo ? `${poInfo.pbsPO}_${poInfo.gmControl}` : "form"}_${formDate}.pdf`; setLastPdfBlob(doc.output("blob")); setLastPdfBase64(doc.output("datauristring").split(",")[1]); setLastPdfName(fn); doc.save(fn); showFB("✓ PDF generated", t.green); } catch (err) { showFB(`PDF error: ${err.message}`, t.red); } setPdfGenerating(false); };
   const printPDF = () => { if (!lastPdfBlob) return; const w = window.open(URL.createObjectURL(lastPdfBlob)); if (w) w.addEventListener("load", () => setTimeout(() => w.print(), 500)); };
   const emailOutlook = () => { if (!lastPdfBase64) return; const body = `Please find the attached Woodstock form for dealer ${settings.dealerCode} (${settings.dealerName}).\n\nDate: ${formDate}\nCompleted by: ${completedBy || "(not specified)"}\nPhone: ${settings.phone}${poInfo ? `\nPO: ${poInfo.pbsPO} / GM Control: ${poInfo.gmControl}` : ""}\n\nSummary:\n${shortItems.length ? `- ${shortItems.length} short\n` : ""}${getDipp().length ? `- ${getDipp().length} DIPP\n` : ""}${getWD().length ? `- ${getWD().length} wrong dealer\n` : ""}`; const eml = buildEML({ to: settings.wdkEmail, cc: getCCStr(), subject: emailSubject, bodyText: body, pdfBase64: lastPdfBase64, pdfFilename: lastPdfName }); const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([eml], { type: "message/rfc822" })); a.download = `woodstock_${formDate}.eml`; document.body.appendChild(a); a.click(); document.body.removeChild(a); showFB("✓ .eml downloaded — open in Outlook", t.green); };
 
@@ -486,7 +599,7 @@ export default function App() {
                 {comp.map((r, i) => { const c = sc(r.status); return <tr key={i} style={{ background: c.row }}><td style={S.td()}><span style={S.bg(c.bg, c.tx)}>{STATUS_CFG[r.status]?.label}</span></td><td style={S.td(t.textStrong)}><strong>{r.partNumber}</strong>{r.superseded && <div style={{ fontSize: 9, color: t.yellowText }}>↳{r.partOrdered}</div>}</td><td style={S.td()}>{r.shippingOrder}</td><td style={S.td()}>{r.expectedQty}</td><td style={S.td(r.scannedQty !== r.expectedQty ? c.tx : null)}>{r.scannedQty}</td><td style={S.td(r.qtyDiff > 0 ? t.yellowText : r.qtyDiff < 0 ? t.redText : t.greenText)}>{r.qtyDiff > 0 ? "+" : ""}{r.qtyDiff}</td><td style={S.td()}>{r.wrongDealer && <span style={{ ...S.bg(`${t.purple}15`, t.purpleText), marginRight: 3 }}>WD</span>}{r.superseded && <span style={{ ...S.bg(`${t.yellow}15`, t.yellowText), marginRight: 3 }}>SUP</span>}{r.dipp && <span style={S.bg(`${t.blue}15`, t.blueText)}>D</span>}</td></tr>; })}</tbody></table></div>}</div></>)}
         </>)}
         {wsTab === "wrongdealer" && <div style={S.card}><div style={S.cH}><span style={S.cL}>Wrong Dealer ({getWD().length})</span></div>{getWD().length === 0 ? <div style={S.empty}>None.</div> : <div style={{ overflowX: "auto" }}><table style={S.tbl}><thead><tr><th style={S.th}>Part #</th><th style={S.th}>Dealer</th><th style={S.th}>Belongs To</th><th style={S.th}>Contact</th><th style={S.th}>SO</th><th style={S.th}>Qty</th></tr></thead><tbody>{getWD().map(item => { const d = lookupDealer(item.dealerCode); return <tr key={item.id}><td style={S.td(t.textStrong)}><strong>{item.partNumber}</strong></td><td style={S.td(t.purpleText)}><strong>{item.dealerCode}</strong></td><td style={S.td()}>{d ? d.name : <em style={{ color: t.textFaint }}>Unknown</em>}</td><td style={S.td()}>{d?.email ? <span>{d.contact} <span style={{ color: t.blueText }}>{d.email}</span></span> : "—"}</td><td style={S.td()}>{item.shippingOrder}</td><td style={S.td()}>{item.quantity}</td></tr>; })}</tbody></table></div>}</div>}
-        {wsTab === "dipp" && <div style={S.card}><div style={S.cH}><span style={S.cL}>DIPP ({getDipp().length})</span></div>{getDipp().length === 0 ? <div style={S.empty}>None.</div> : <div style={{ overflowX: "auto" }}><table style={S.tbl}><thead><tr><th style={S.th}>Part #</th><th style={S.th}>PDC</th><th style={S.th}>SO</th><th style={S.th}>Comments</th></tr></thead><tbody>{getDipp().map(item => <tr key={item.id}><td style={S.td(t.textStrong)}><strong>{item.partNumber}</strong></td><td style={S.td()}>{item.pdc}</td><td style={S.td()}>{item.shippingOrder}</td><td style={S.td()}><input style={{ ...S.inp, width: "100%", minWidth: 140 }} value={dippComments[item.id] || ""} onChange={e => setDippComments(p => ({ ...p, [item.id]: e.target.value }))} placeholder="Damage..." /><div style={{ display: "flex", gap: 3, flexWrap: "wrap", marginTop: 4 }}>{DIPP_PRESETS.map(p => <button key={p} style={S.sm(t.bg3, t.textMuted)} onClick={() => setDippComments(prev => ({ ...prev, [item.id]: (prev[item.id] || "") + (prev[item.id] ? ", " : "") + p }))}>{p}</button>)}</div></td></tr>)}</tbody></table></div>}</div>}
+        {wsTab === "dipp" && <div style={S.card}><div style={S.cH}><span style={S.cL}>DIPP ({getDipp().length})</span></div>{getDipp().length === 0 ? <div style={S.empty}>None.</div> : <div style={{ overflowX: "auto" }}><table style={S.tbl}><thead><tr><th style={S.th}>Part #</th><th style={S.th}>PDC</th><th style={S.th}>SO</th><th style={S.th}>Description</th><th style={S.th}>Comments</th></tr></thead><tbody>{getDipp().map(item => <tr key={item.id}><td style={S.td(t.textStrong)}><strong>{item.partNumber}</strong></td><td style={S.td()}>{item.pdc}</td><td style={S.td()}>{item.shippingOrder}</td><td style={S.td()}><input style={{ ...S.inp, width: "100%", minWidth: 120 }} value={dippDescriptions[item.id] || ""} onChange={e => setDippDescriptions(p => ({ ...p, [item.id]: e.target.value }))} placeholder="Part description..." /></td><td style={S.td()}><input style={{ ...S.inp, width: "100%", minWidth: 140 }} value={dippComments[item.id] || ""} onChange={e => setDippComments(p => ({ ...p, [item.id]: e.target.value }))} placeholder="Damage..." /><div style={{ display: "flex", gap: 3, flexWrap: "wrap", marginTop: 4 }}>{DIPP_PRESETS.map(p => <button key={p} style={S.sm(t.bg3, t.textMuted)} onClick={() => setDippComments(prev => ({ ...prev, [item.id]: (prev[item.id] || "") + (prev[item.id] ? ", " : "") + p }))}>{p}</button>)}</div></td></tr>)}</tbody></table></div>}</div>}
         {wsTab === "form" && (<>
           <div style={S.card}>
             <div style={S.cH}><span style={S.cL}>Woodstock Form</span></div>
