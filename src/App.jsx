@@ -184,11 +184,7 @@ async function generateWoodstockPDF({ settings, shortItems, dippItems, dippComme
     page.drawText(formDate, { x: 312, y: toY(309), size: 10, font: fontBold, color: rgb(0, 0, 0) });
   }
   if (settings.phone) {
-    page.drawText(settings.phone, { x: 462, y: toY(309), size: 10, font: fontBold, color: rgb(0, 0, 0) });
-  }
-  if (poInfo) {
-    const poText = `PO: ${poInfo.pbsPO}  GM#: ${poInfo.gmControl}`;
-    page.drawText(poText, { x: 450, y: toY(320), size: 7, font, color: rgb(0, 0, 0) });
+    page.drawText(settings.phone, { x: 490, y: toY(309), size: 10, font: fontBold, color: rgb(0, 0, 0) });
   }
 
   return pdfDoc;
