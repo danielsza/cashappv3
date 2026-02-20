@@ -229,9 +229,11 @@ async function generatePinkSheet(purchaseOrders, activePO, scannedItems = []) {
       ws.pageSetup = { orientation: "landscape", paperSize: 1, fitToPage: true, fitToWidth: 1, fitToHeight: 0 };
 
       // PO# and Shipping Order#
-      ws.getCell("A1").value = po.pbsPO;
+      ws.getCell("A1").value = po.gmControl || po.pbsPO;
       ws.getCell("A1").font = titleFont;
       ws.getCell("A1").alignment = { horizontal: "right" };
+      ws.getCell("B1").value = po.gmControl ? `(${po.pbsPO})` : "";
+      ws.getCell("B1").font = { ...normalFont, italic: true };
       ws.getCell("A2").value = shipNo !== "none" ? Number(shipNo) || shipNo : "";
       ws.getCell("A2").font = titleFont;
       ws.getCell("A2").alignment = { horizontal: "right" };
@@ -402,6 +404,7 @@ export default function App() {
   const [csvText, setCsvText] = useState(""); const [csvPO, setCsvPO] = useState("");
   const scanRef = useRef(null);
   const fileInputRef = useRef(null);
+  const scanFileRef = useRef(null);
 
   // Persist settings + scans
   useEffect(() => { saveSettingsToStorage(settings); }, [settings]);
@@ -434,10 +437,13 @@ export default function App() {
           const d2 = await r2.json();
           if (d2.scans && d2.scans.length > 0) {
             setScannedItems(prev => {
-              const existingIds = new Set(prev.map(i => i.id));
-              const newItems = d2.scans.filter(s => !existingIds.has(s.id));
-              if (newItems.length === 0) return prev;
-              return [...prev, ...newItems];
+              const merged = [...prev];
+              for (const s of d2.scans) {
+                const ex = merged.find(i => i.partNumber === s.partNumber && i.shippingOrder === s.shippingOrder);
+                if (ex) { ex.quantity = s.quantity; ex.scans = s.scans || ex.scans; ex.dipp = s.dipp || ex.dipp; ex.wrongDealer = s.wrongDealer || ex.wrongDealer; }
+                else merged.push(s);
+              }
+              return merged;
             });
           }
         }
@@ -512,6 +518,44 @@ export default function App() {
   };
 
   const handleScanKeyDown = (e) => { if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); processScan(scanInput); setScanInput(""); } };
+  const importScanFile = async (e) => {
+    const file = e.target.files?.[0]; if (!file) return;
+    try {
+      const text = await file.text();
+      let items = [];
+      if (file.name.endsWith(".json")) {
+        const data = JSON.parse(text);
+        items = Array.isArray(data) ? data : data.scans || data.items || [];
+      } else {
+        // CSV: PartNumber,ShippingOrder,Quantity,PDC,DealerCode
+        const lines = text.split(/\r?\n/).filter(l => l.trim());
+        const header = lines[0].toLowerCase();
+        const hasHeader = header.includes("part") || header.includes("qty") || header.includes("ship");
+        const start = hasHeader ? 1 : 0;
+        for (let i = start; i < lines.length; i++) {
+          const cols = lines[i].split(",").map(c => c.trim().replace(/^["']|["']$/g, ""));
+          if (!cols[0]) continue;
+          items.push({ partNumber: cols[0], shippingOrder: cols[1] || "", quantity: parseInt(cols[2], 10) || 1, pdc: cols[3] || "", dealerCode: cols[4] || settings.dealerCode });
+        }
+      }
+      let added = 0;
+      setScannedItems(prev => {
+        const merged = [...prev];
+        for (const item of items) {
+          const pn = String(item.partNumber || "").replace(/\s/g, "");
+          const so = String(item.shippingOrder || "").replace(/\s/g, "");
+          if (!pn) continue;
+          const ex = merged.find(i => i.partNumber === pn && i.shippingOrder === so);
+          if (ex) { ex.quantity = item.quantity || ex.quantity; }
+          else { merged.push({ partNumber: pn, shippingOrder: so, quantity: item.quantity || 1, pdc: item.pdc || "", dealerCode: item.dealerCode || settings.dealerCode, wrongDealer: item.wrongDealer || (item.dealerCode && item.dealerCode !== settings.dealerCode), raw: `import:${pn}`, scans: [`import:${pn}`], id: Date.now() + Math.random() + added, dipp: item.dipp || false }); }
+          added++;
+        }
+        return merged;
+      });
+      showFB(`✓ Imported ${added} scan records from ${file.name}`, t.green);
+    } catch (err) { showFB(`Import error: ${err.message}`, t.red); }
+    if (scanFileRef.current) scanFileRef.current.value = "";
+  };
   const toggleDipp = (id) => setScannedItems(prev => prev.map(i => i.id === id ? { ...i, dipp: !i.dipp } : i));
   const delScan = (id) => setScannedItems(prev => prev.filter(i => i.id !== id));
   const adjQty = (id, d) => setScannedItems(prev => prev.map(i => i.id === id ? { ...i, quantity: Math.max(1, i.quantity + d) } : i));
@@ -542,9 +586,77 @@ export default function App() {
   const getCCStr = () => { const codes = [...new Set(getWD().map(i => i.dealerCode))]; return codes.map(c => lookupDealer(c)).filter(d => d?.email).map(d => `${d.contact ? `"${d.contact}" ` : ""}<${d.email}>`).join(", "); };
 
   const generatePDFHandler = async () => { setPdfGenerating(true); try { const pdfDoc = await generateWoodstockPDF({ settings, shortItems: shortItems, dippItems: getDipp(), dippComments, dippDescriptions, wrongDealerItems: getWD(), completedBy, formDate, poInfo, toteChoices, wdContact, wdRedirect }); const pdfBytes = await pdfDoc.save(); const fn = `woodstock_form_${poInfo ? `${poInfo.pbsPO}_${poInfo.gmControl}` : "form"}_${formDate}.pdf`; const blob = new Blob([pdfBytes], { type: "application/pdf" }); setLastPdfBlob(blob); const b64 = btoa(pdfBytes.reduce((d, b) => d + String.fromCharCode(b), "")); setLastPdfBase64(b64); setLastPdfName(fn); const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = fn; a.click(); URL.revokeObjectURL(url); showFB("✓ PDF generated", t.green); } catch (err) { showFB(`PDF error: ${err.message}`, t.red); } setPdfGenerating(false); };
-  const printPDF = () => { if (!lastPdfBlob) return; const w = window.open(URL.createObjectURL(lastPdfBlob)); if (w) w.addEventListener("load", () => setTimeout(() => w.print(), 500)); };
-  const emailOutlook = () => { if (!lastPdfBase64) return; const body = `Please find the attached Woodstock form for dealer ${settings.dealerCode} (${settings.dealerName}).\n\nDate: ${formDate}\nCompleted by: ${completedBy || "(not specified)"}\nPhone: ${settings.phone}${poInfo ? `\nPO: ${poInfo.pbsPO} / GM Control: ${poInfo.gmControl}` : ""}\n\nSummary:\n${shortItems.length ? `- ${shortItems.length} short\n` : ""}${getDipp().length ? `- ${getDipp().length} DIPP\n` : ""}${getWD().length ? `- ${getWD().length} wrong dealer\n` : ""}`; const eml = buildEML({ to: settings.wdkEmail, cc: getCCStr(), subject: emailSubject, bodyText: body, pdfBase64: lastPdfBase64, pdfFilename: lastPdfName }); const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([eml], { type: "message/rfc822" })); a.download = `woodstock_${formDate}.eml`; document.body.appendChild(a); a.click(); document.body.removeChild(a); showFB("✓ .eml downloaded — open in Outlook", t.green); };
-  const downloadPinkSheet = async () => { try { const blob = await generatePinkSheet(purchaseOrders, activePO, scannedItems); if (!blob) { showFB("No PO data to generate pink sheet", t.red); return; } const fn = `pink_sheet_${activePO || "all"}_${formDate}.xlsx`; const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = fn; a.click(); URL.revokeObjectURL(url); showFB(`✓ Pink sheet downloaded: ${fn}`, t.green); } catch (err) { showFB(`Pink sheet error: ${err.message}`, t.red); } };
+  const printPDF = () => {
+    if (!lastPdfBlob) return;
+    const url = URL.createObjectURL(lastPdfBlob);
+    const iframe = document.createElement("iframe");
+    iframe.style.display = "none";
+    iframe.src = url;
+    document.body.appendChild(iframe);
+    iframe.onload = () => { iframe.contentWindow.focus(); iframe.contentWindow.print(); setTimeout(() => { document.body.removeChild(iframe); URL.revokeObjectURL(url); }, 60000); };
+  };
+  const emailOutlook = () => {
+    if (!lastPdfBase64) return;
+    const body = `Please find the attached Woodstock form for dealer ${settings.dealerCode} (${settings.dealerName}).\n\nDate: ${formDate}\nCompleted by: ${completedBy || "(not specified)"}\nPhone: ${settings.phone}${poInfo ? `\nPO: ${poInfo.pbsPO} / GM Control: ${poInfo.gmControl}` : ""}\n\nSummary:\n${shortItems.length ? `- ${shortItems.length} short\n` : ""}${getDipp().length ? `- ${getDipp().length} DIPP\n` : ""}${getWD().length ? `- ${getWD().length} wrong dealer\n` : ""}`;
+    // Open mailto: in default email client
+    const mailto = `mailto:${encodeURIComponent(settings.wdkEmail)}?cc=${encodeURIComponent(getCCStr().replace(/"[^"]*"\s*/g, "").replace(/[<>]/g, ""))}&subject=${encodeURIComponent(emailSubject)}&body=${encodeURIComponent(body)}`;
+    window.open(mailto, "_blank");
+    // Also download PDF so they can attach it
+    const a = document.createElement("a"); a.href = URL.createObjectURL(lastPdfBlob); a.download = lastPdfName; a.click();
+    showFB("✓ Email opened + PDF downloaded — attach the PDF", t.green);
+  };
+  const downloadPinkSheet = async () => {
+    try {
+      const pos = activePO === "__all__" ? purchaseOrders : purchaseOrders.filter(p => p.pbsPO === activePO);
+      if (!pos.length) { showFB("No PO data", t.red); return; }
+      let html = `<html><head><title>Pink Sheet</title><style>@page{size:landscape;margin:0.5in}body{font-family:Arial,sans-serif;font-size:10pt;margin:0;padding:0}.sheet{page-break-after:always;padding:20px}.sheet:last-child{page-break-after:auto}h1{font-size:14pt;text-decoration:underline;margin:0;text-align:right}h2{font-size:14pt;text-decoration:underline;margin:0 0 10px;text-align:right}table{border-collapse:collapse;width:100%}th{font-weight:bold;text-align:left;padding:3px 6px;font-size:9pt;border-bottom:1px solid #000}td{padding:3px 6px;font-size:9pt}.sep td{border-bottom:3px solid #000}.pink{background:#ff80ff;font-weight:bold}.green{background:#90ee90;font-weight:bold;border:2px solid #228b22}.circle{font-weight:bold;border:2px solid #000}.sup{font-style:italic;font-size:8pt;color:#666}.notes{font-size:8pt;color:#555}</style></head><body>`;
+      for (const po of pos) {
+        const allRows = po.data;
+        const shipNums = [...new Set(allRows.filter(r => r.status === "Shipped" && r.shipmentNo).map(r => r.shipmentNo))].sort();
+        if (!shipNums.length) shipNums.push("none");
+        for (const shipNo of shipNums) {
+          const controlLabel = po.gmControl || po.pbsPO;
+          const subLabel = po.gmControl ? ` (${po.pbsPO})` : "";
+          html += `<div class="sheet"><h1>${controlLabel}${subLabel}</h1><h2>${shipNo !== "none" ? shipNo : ""}</h2>`;
+          html += `<table><thead><tr><th>Status</th><th>Line#</th><th>Part Ordered</th><th>Part Processed</th><th>Facility</th><th>Qty Ord</th><th>Qty Proc</th><th>Ship#</th><th>Notes</th></tr></thead><tbody>`;
+          const nonShipped = allRows.filter(r => r.status !== "Shipped").sort((a, b) => a.partOrdered.localeCompare(b.partOrdered));
+          const shipped = allRows.filter(r => r.status === "Shipped" && r.shipmentNo === shipNo).sort((a, b) => a.partProcessed.localeCompare(b.partProcessed));
+          for (const r of nonShipped) {
+            const isSup = r.partOrdered && r.partProcessed && r.partOrdered !== r.partProcessed;
+            const isLast = r === nonShipped[nonShipped.length - 1] && shipped.length > 0;
+            html += `<tr${isLast ? ' class="sep"' : ""}><td>${r.status}</td><td></td><td>${r.partOrdered}</td><td${isSup ? ' class="pink"' : ""}>${r.partProcessed}</td><td>${r.facility}</td><td>${r.qtyOrdered}</td><td>${r.qtyProc}</td><td>${r.shipmentNo || ""}</td><td></td></tr>`;
+          }
+          for (const r of shipped) {
+            const isSup = r.partOrdered && r.partProcessed && r.partOrdered !== r.partProcessed;
+            const qtyDiff = r.qtyOrdered !== r.qtyProc;
+            const partToMatch = r.partProcessed || r.partOrdered;
+            const scan = scannedItems.find(s => s.partNumber === partToMatch && s.shippingOrder === r.shipmentNo);
+            const notes = [];
+            let qtyCls = "";
+            if (qtyDiff) { qtyCls = "pink circle"; notes.push(`Ord:${r.qtyOrdered} Proc:${r.qtyProc} (${r.qtyProc - r.qtyOrdered > 0 ? "+" : ""}${r.qtyProc - r.qtyOrdered})`); }
+            if (scan) {
+              if (scan.quantity === r.qtyProc) { if (!qtyDiff) qtyCls = "green"; notes.push(`✓ Scanned: ${scan.quantity}`); }
+              else { qtyCls = "pink circle"; notes.push(`Scanned: ${scan.quantity} (exp ${r.qtyProc})`); }
+            }
+            if (isSup) notes.push(`SUP: ${r.partOrdered}`);
+            html += `<tr><td>${r.status}</td><td></td><td>${r.partOrdered}</td><td${isSup ? ' class="pink"' : ""}>${r.partProcessed}</td><td>${r.facility}</td><td>${r.qtyOrdered}</td><td${qtyCls ? ` class="${qtyCls}"` : ""}>${r.qtyProc}</td><td>${r.shipmentNo || ""}</td><td class="notes">${notes.join(" | ")}</td></tr>`;
+          }
+          html += `</tbody></table></div>`;
+        }
+      }
+      html += `</body></html>`;
+      const iframe = document.createElement("iframe");
+      iframe.style.display = "none";
+      document.body.appendChild(iframe);
+      iframe.contentDocument.open();
+      iframe.contentDocument.write(html);
+      iframe.contentDocument.close();
+      iframe.onload = () => { iframe.contentWindow.focus(); iframe.contentWindow.print(); };
+      setTimeout(() => { iframe.contentWindow.focus(); iframe.contentWindow.print(); }, 500);
+      setTimeout(() => document.body.removeChild(iframe), 60000);
+      showFB("✓ Pink sheet sent to printer", t.green);
+    } catch (err) { showFB(`Pink sheet error: ${err.message}`, t.red); }
+  };
 
   // ─── Styles ─────────────────────────────────────────────────
   const S = {
@@ -705,7 +817,7 @@ export default function App() {
         {wsTab === "scan" && (<>
           {pendingUS && <div style={{ padding: "8px 12px", background: t.yellowBg, borderBottom: `2px solid ${t.yellow}`, color: t.yellowText, fontSize: 12, fontWeight: 600, display: "flex", justifyContent: "space-between", marginBottom: 10 }}><span>⏳ US {pendingUS.type === "header" ? "part" : "header"} pending</span><button style={S.sm(`${t.yellow}20`, t.yellowText)} onClick={() => setPendingUS(null)}>Cancel</button></div>}
           <div style={S.card}><div style={{ padding: 12 }}><input ref={scanRef} autoFocus autoComplete="off" style={{ width: "100%", padding: "12px 14px", background: t.bgInput, border: `2px solid ${t.border}`, borderRadius: 6, color: t.textStrong, fontFamily: ff, fontSize: 15, outline: "none", boxSizing: "border-box" }} value={scanInput} onChange={e => setScanInput(e.target.value)} onKeyDown={handleScanKeyDown} onFocus={e => e.target.style.borderColor = t.accent} onBlur={e => e.target.style.borderColor = t.border} placeholder="▸ Scan barcode — Enter or Tab" />{lastFeedback && <div style={S.fb(lastFeedback.color)}>{lastFeedback.msg}</div>}</div></div>
-          <div style={S.card}><div style={S.cH}><span style={S.cL}>Scanned · {stats.unique} unique · {stats.total} total</span>{scannedItems.length > 0 && <button style={S.sm(t.bg3, t.textMuted)} onClick={() => { if (confirm("Clear?")) setScannedItems([]) }}>Clear</button>}</div>
+          <div style={S.card}><div style={S.cH}><span style={S.cL}>Scanned · {stats.unique} unique · {stats.total} total</span><div style={{ display: "flex", gap: 4 }}><label style={{ ...S.sm(t.bg3, t.textMuted), cursor: "pointer" }}>📥 Import<input ref={scanFileRef} type="file" accept=".csv,.json,.txt" onChange={importScanFile} style={{ display: "none" }} /></label>{scannedItems.length > 0 && <><button style={S.sm(t.bg3, t.textMuted)} onClick={() => { const data = scannedItems.map(i => `${i.partNumber},${i.shippingOrder},${i.quantity},${i.pdc},${i.dealerCode}`); const csv = "PartNumber,ShippingOrder,Quantity,PDC,DealerCode\n" + data.join("\n"); const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" })); a.download = `scans_${formDate}.csv`; a.click(); showFB("✓ Scans exported", t.green); }}>📤 Export</button><button style={S.sm(t.bg3, t.textMuted)} onClick={() => { if (confirm("Clear?")) setScannedItems([]) }}>Clear</button></>}</div></div>
             {scannedItems.length === 0 ? <div style={S.empty}>No items.</div> : <div style={{ overflowX: "auto", maxHeight: 500, overflowY: "auto" }}><table style={S.tbl}><thead><tr><th style={S.th}>Part #</th><th style={S.th}>SO</th><th style={S.th}>PDC</th><th style={S.th}>Dealer</th><th style={S.th}>Qty</th><th style={S.th}>Flags</th><th style={S.th}></th></tr></thead><tbody>
               {[...scannedItems].reverse().map(item => { const dn = item.wrongDealer ? lookupDealer(item.dealerCode) : null; return (
                 <tr key={item.id} style={{ background: item.wrongDealer ? `${t.purple}08` : "transparent" }}>
@@ -722,7 +834,7 @@ export default function App() {
             {purchaseOrders.length > 0 && <div style={{ padding: "8px 12px", display: "flex", gap: 6, flexWrap: "wrap", borderBottom: `1px solid ${t.border}` }}><button style={{ padding: "5px 10px", background: activePO === "__all__" ? t.accentBg : t.bg3, border: `1px solid ${activePO === "__all__" ? t.accent : t.border}`, borderRadius: 4, cursor: "pointer", fontSize: 11, color: activePO === "__all__" ? t.accentText : t.textMuted, fontFamily: ff }} onClick={() => setActivePO("__all__")}>All</button>{purchaseOrders.map(po => <button key={po.id} style={{ padding: "5px 10px", background: activePO === po.pbsPO ? t.accentBg : t.bg3, border: `1px solid ${activePO === po.pbsPO ? t.accent : t.border}`, borderRadius: 4, cursor: "pointer", fontSize: 11, color: activePO === po.pbsPO ? t.accentText : t.textMuted, fontFamily: ff, display: "flex", alignItems: "center", gap: 6 }} onClick={() => setActivePO(po.pbsPO)}><strong>{po.pbsPO}</strong>{po.gmControl && ` · ${po.gmControl}`}<span style={S.sm("transparent", t.textFaint)} onClick={e => { e.stopPropagation(); removePO(po.id); }}>✕</span></button>)}</div>}
             <details style={{ borderTop: `1px solid ${t.border}` }}><summary style={{ padding: "8px 12px", cursor: "pointer", fontSize: 11, color: t.textMuted }}>Paste CSV</summary><div style={{ padding: 12 }}><input style={S.inp} value={csvPO} onChange={e => setCsvPO(e.target.value)} placeholder="PO Name" /><textarea style={{ width: "100%", padding: 10, background: t.bgInput, border: `1px solid ${t.border}`, borderRadius: 4, color: t.text, fontFamily: ff, fontSize: 12, minHeight: 80, resize: "vertical", boxSizing: "border-box", marginTop: 6 }} value={csvText} onChange={e => setCsvText(e.target.value)} placeholder="Paste..." /><button style={{ ...S.btn(t.accent, "#fff"), marginTop: 6 }} onClick={handleCSVPaste}>Load</button></div></details>
           </div>
-          {purchaseOrders.length > 0 && (<><div style={{ display: "flex", gap: 8, marginBottom: 10, alignItems: "center" }}><span style={{ fontSize: 10, color: t.textMuted, fontWeight: 600 }}>SHIPMENT:</span><select style={S.sel} value={selectedShipment} onChange={e => setSelectedShipment(e.target.value)}><option value="all">All</option>{getShipNums().map(sn => <option key={sn} value={sn}>{sn}</option>)}</select><button style={{ padding: "6px 14px", background: "#e91e90", color: "#fff", border: "none", borderRadius: 6, fontFamily: ff, fontSize: 11, fontWeight: 600, cursor: "pointer", marginLeft: "auto" }} onClick={downloadPinkSheet}>📋 Pink Sheet</button></div>
+          {purchaseOrders.length > 0 && (<><div style={{ display: "flex", gap: 8, marginBottom: 10, alignItems: "center" }}><span style={{ fontSize: 10, color: t.textMuted, fontWeight: 600 }}>SHIPMENT:</span><select style={S.sel} value={selectedShipment} onChange={e => setSelectedShipment(e.target.value)}><option value="all">All</option>{getShipNums().map(sn => <option key={sn} value={sn}>{sn}</option>)}</select><button style={{ padding: "6px 14px", background: "#e91e90", color: "#fff", border: "none", borderRadius: 6, fontFamily: ff, fontSize: 11, fontWeight: 600, cursor: "pointer", marginLeft: "auto" }} onClick={downloadPinkSheet}>🖨 Pink Sheet</button></div>
             <div style={S.card}><div style={S.cH}><span style={S.cL}><span style={{ color: t.greenText }}>{nM}✓</span> · <span style={{ color: t.redText }}>{nS} short</span> · <span style={{ color: t.yellowText }}>{nO} over</span></span></div>
               {comp.length === 0 ? <div style={S.empty}>No results.</div> : <div style={{ overflowX: "auto", maxHeight: 500, overflowY: "auto" }}><table style={S.tbl}><thead><tr><th style={S.th}>Status</th><th style={S.th}>Part #</th><th style={S.th}>SO</th><th style={S.th}>Exp</th><th style={S.th}>Scan</th><th style={S.th}>Diff</th><th style={S.th}>Notes</th></tr></thead><tbody>
                 {comp.map((r, i) => { const c = sc(r.status); return <tr key={i} style={{ background: c.row }}><td style={S.td()}><span style={S.bg(c.bg, c.tx)}>{STATUS_CFG[r.status]?.label}</span></td><td style={S.td(t.textStrong)}><strong>{r.partNumber}</strong>{r.superseded && <div style={{ fontSize: 9, color: t.yellowText }}>↳{r.partOrdered}</div>}</td><td style={S.td()}>{r.shippingOrder}</td><td style={S.td()}>{r.expectedQty}</td><td style={S.td(r.scannedQty !== r.expectedQty ? c.tx : null)}>{r.scannedQty}</td><td style={S.td(r.qtyDiff > 0 ? t.yellowText : r.qtyDiff < 0 ? t.redText : t.greenText)}>{r.qtyDiff > 0 ? "+" : ""}{r.qtyDiff}</td><td style={S.td()}>{r.wrongDealer && <span style={{ ...S.bg(`${t.purple}15`, t.purpleText), marginRight: 3 }}>WD</span>}{r.superseded && <span style={{ ...S.bg(`${t.yellow}15`, t.yellowText), marginRight: 3 }}>SUP</span>}{r.dipp && <span style={S.bg(`${t.blue}15`, t.blueText)}>D</span>}</td></tr>; })}</tbody></table></div>}</div></>)}
