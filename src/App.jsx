@@ -40,6 +40,7 @@ const DEFAULTS = {
   phone: "905-575-9400", wdkEmail: "wdk.courtesy@gm.com", theme: "light",
   knownDealers: KNOWN_DEALERS_DEFAULT,
   users: ["Daniel"], defaultUser: "Daniel",
+  highlightColor: "#c2f4fc", customPdfTemplate: "",
 };
 
 // ─── Barcode Helpers ─────────────────────────────────────────────
@@ -116,7 +117,8 @@ function drawUnderlinedText(doc, text, x, y, opts = {}) {
 // ─── PDF Generator ───────────────────────────────────────────────
 async function generateWoodstockPDF({ settings, shortItems, dippItems, dippComments, dippDescriptions = {}, wrongDealerItems, completedBy, formDate, poInfo, toteChoices = {}, wdContact = {}, wdRedirect = {} }) {
   // Load the original Woodstock form as template (pixel-perfect layout)
-  const templateBytes = Uint8Array.from(atob(WOODSTOCK_TEMPLATE_B64), c => c.charCodeAt(0));
+  const templateB64 = settings.customPdfTemplate || WOODSTOCK_TEMPLATE_B64;
+  const templateBytes = Uint8Array.from(atob(templateB64), c => c.charCodeAt(0));
   const pdfDoc = await PDFDocument.load(templateBytes);
   const page = pdfDoc.getPages()[0];
   const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
@@ -586,8 +588,13 @@ export default function App() {
   const getCCStr = () => { const codes = [...new Set(getWD().map(i => i.dealerCode))]; return codes.map(c => lookupDealer(c)).filter(d => d?.email).map(d => `${d.contact ? `"${d.contact}" ` : ""}<${d.email}>`).join(", "); };
 
   const generatePDFHandler = async () => { setPdfGenerating(true); try { const pdfDoc = await generateWoodstockPDF({ settings, shortItems: shortItems, dippItems: getDipp(), dippComments, dippDescriptions, wrongDealerItems: getWD(), completedBy, formDate, poInfo, toteChoices, wdContact, wdRedirect }); const pdfBytes = await pdfDoc.save(); const fn = `woodstock_form_${poInfo ? `${poInfo.pbsPO}_${poInfo.gmControl}` : "form"}_${formDate}.pdf`; const blob = new Blob([pdfBytes], { type: "application/pdf" }); setLastPdfBlob(blob); const b64 = btoa(pdfBytes.reduce((d, b) => d + String.fromCharCode(b), "")); setLastPdfBase64(b64); setLastPdfName(fn); const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = fn; a.click(); URL.revokeObjectURL(url); showFB("✓ PDF generated", t.green); } catch (err) { showFB(`PDF error: ${err.message}`, t.red); } setPdfGenerating(false); };
-  const printPDF = () => {
+  const isElectron = !!(window.electronAPI?.isElectron);
+  const printPDF = async () => {
     if (!lastPdfBlob) return;
+    if (isElectron && lastPdfBase64) {
+      const res = await window.electronAPI.printPdf({ base64: lastPdfBase64, filename: lastPdfName });
+      if (res.success) { showFB("✓ Sent to print", t.green); return; }
+    }
     const url = URL.createObjectURL(lastPdfBlob);
     const iframe = document.createElement("iframe");
     iframe.style.display = "none";
@@ -595,15 +602,25 @@ export default function App() {
     document.body.appendChild(iframe);
     iframe.onload = () => { iframe.contentWindow.focus(); iframe.contentWindow.print(); setTimeout(() => { document.body.removeChild(iframe); URL.revokeObjectURL(url); }, 60000); };
   };
-  const emailOutlook = () => {
+  const emailOutlook = async () => {
     if (!lastPdfBase64) return;
     const body = `Please find the attached Woodstock form for dealer ${settings.dealerCode} (${settings.dealerName}).\n\nDate: ${formDate}\nCompleted by: ${completedBy || "(not specified)"}\nPhone: ${settings.phone}${poInfo ? `\nPO: ${poInfo.pbsPO} / GM Control: ${poInfo.gmControl}` : ""}\n\nSummary:\n${shortItems.length ? `- ${shortItems.length} short\n` : ""}${getDipp().length ? `- ${getDipp().length} DIPP\n` : ""}${getWD().length ? `- ${getWD().length} wrong dealer\n` : ""}`;
+    if (isElectron) {
+      try {
+        const tmpRes = await window.electronAPI.saveTempPdf({ base64: lastPdfBase64, filename: lastPdfName });
+        if (!tmpRes.success) throw new Error(tmpRes.error);
+        const res = await window.electronAPI.sendOutlookEmail({ to: settings.wdkEmail, cc: getCCStr(), subject: emailSubject, body, pdfPath: tmpRes.path, pdfFilename: lastPdfName });
+        if (res.success) { showFB("✓ Outlook email opened with PDF attached", t.green); return; }
+        throw new Error(res.error);
+      } catch (err) { showFB(`Outlook COM failed, falling back to .eml: ${err.message}`, t.yellow); }
+    }
     const eml = buildEML({ to: settings.wdkEmail, cc: getCCStr(), subject: emailSubject, bodyText: body, pdfBase64: lastPdfBase64, pdfFilename: lastPdfName });
     const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([eml], { type: "message/rfc822" })); a.download = `woodstock_${formDate}.eml`; document.body.appendChild(a); a.click(); document.body.removeChild(a);
-    showFB("✓ .eml downloaded — open in Outlook (auto-attach coming with desktop app)", t.green);
+    showFB(isElectron ? "✓ .eml downloaded (Outlook COM unavailable)" : "✓ .eml downloaded — open in Outlook", t.green);
   };
   const downloadPinkSheet = async () => {
     try {
+      const hlColor = settings.highlightColor || "#c2f4fc";
       const pos = activePO === "__all__" ? purchaseOrders : purchaseOrders.filter(p => p.pbsPO === activePO);
       if (!pos.length) { showFB("No PO data", t.red); return; }
       let html = `<html><head><title>Pink Sheet</title><style>
@@ -616,10 +633,10 @@ table{border-collapse:collapse;width:100%}
 th{font-weight:bold;text-align:left;padding:3px 6px;font-size:9pt;border-bottom:1px solid #000}
 td{padding:3px 6px;font-size:9pt}
 .sep td{border-bottom:3px solid #000}
-.pink{background:#c2f4fc;font-weight:bold}
+.hl{background:${hlColor};font-weight:bold}
 .notes{font-size:8pt;color:#555}
 .circ{display:inline-block;min-width:18px;text-align:center;padding:1px 6px;font-weight:bold;border-radius:50%;border:2px solid #000}
-.qty-diff{background:#c2f4fc}
+.qty-diff{background:${hlColor}}
 </style></head><body>`;
       for (const po of pos) {
         const allRows = po.data;
@@ -633,7 +650,7 @@ td{padding:3px 6px;font-size:9pt}
           for (const r of nonShipped) {
             const isSup = r.partOrdered && r.partProcessed && r.partOrdered !== r.partProcessed;
             const isLast = r === nonShipped[nonShipped.length - 1] && shipped.length > 0;
-            html += `<tr${isLast ? ' class="sep"' : ""}><td>${r.status}</td><td></td><td>${r.partOrdered}</td><td${isSup ? ' class="pink"' : ""}>${r.partProcessed}</td><td>${r.facility}</td><td>${r.qtyOrdered}</td><td>${r.qtyProc}</td><td>${r.shipmentNo || ""}</td><td></td></tr>`;
+            html += `<tr${isLast ? ' class="sep"' : ""}><td>${r.status}</td><td></td><td>${r.partOrdered}</td><td${isSup ? ' class="hl"' : ""}>${r.partProcessed}</td><td>${r.facility}</td><td>${r.qtyOrdered}</td><td>${r.qtyProc}</td><td>${r.shipmentNo || ""}</td><td></td></tr>`;
           }
           for (const r of shipped) {
             const isSup = r.partOrdered && r.partProcessed && r.partOrdered !== r.partProcessed;
@@ -660,7 +677,7 @@ td{padding:3px 6px;font-size:9pt}
               // Scanned but doesn't match — no circle
               notes.push(`Scanned: ${scan.quantity} (exp ${r.qtyProc})`);
             }
-            html += `<tr><td>${r.status}</td><td></td><td>${r.partOrdered}</td><td${isSup ? ' class="pink"' : ""}>${r.partProcessed}</td><td>${r.facility}</td><td>${r.qtyOrdered}</td><td${tdExtra}>${qtyHtml}</td><td>${r.shipmentNo || ""}</td><td class="notes">${notes.join(" | ")}</td></tr>`;
+            html += `<tr><td>${r.status}</td><td></td><td>${r.partOrdered}</td><td${isSup ? ' class="hl"' : ""}>${r.partProcessed}</td><td>${r.facility}</td><td>${r.qtyOrdered}</td><td${tdExtra}>${qtyHtml}</td><td>${r.shipmentNo || ""}</td><td class="notes">${notes.join(" | ")}</td></tr>`;
           }
           html += `</tbody></table></div>`;
         }
@@ -719,6 +736,8 @@ td{padding:3px 6px;font-size:9pt}
             <div style={{ marginBottom: 14 }}><label style={S.lbl}>Phone</label><input style={S.mI} value={settingsDraft.phone} onChange={e => setSettingsDraft(p => ({ ...p, phone: e.target.value }))} /></div>
             <div style={{ marginBottom: 14 }}><label style={S.lbl}>Woodstock Email</label><input style={S.mI} value={settingsDraft.wdkEmail} onChange={e => setSettingsDraft(p => ({ ...p, wdkEmail: e.target.value }))} /></div>
             <div style={{ marginBottom: 14 }}><label style={S.lbl}>Theme</label><div style={{ display: "flex", gap: 8, marginTop: 4 }}>{["light", "dark"].map(m => <button key={m} onClick={() => setSettingsDraft(p => ({ ...p, theme: m }))} style={{ padding: "8px 20px", borderRadius: 6, border: `2px solid ${settingsDraft.theme === m ? t.accent : t.border}`, background: m === "dark" ? "#18181b" : "#f8f8fa", color: m === "dark" ? "#e4e4e7" : "#18181b", fontFamily: ff, fontSize: 12, fontWeight: settingsDraft.theme === m ? 700 : 400, cursor: "pointer" }}>{m === "light" ? "☀ Light" : "🌙 Dark"}</button>)}</div></div>
+            <div style={{ marginBottom: 14 }}><label style={S.lbl}>Pink Sheet Highlight Color</label><div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 4 }}><input type="color" value={settingsDraft.highlightColor || "#c2f4fc"} onChange={e => setSettingsDraft(p => ({ ...p, highlightColor: e.target.value }))} style={{ width: 40, height: 32, border: `1px solid ${t.border}`, borderRadius: 4, cursor: "pointer", padding: 0 }} /><input style={{ ...S.mI, flex: 1, marginBottom: 0, fontFamily: "monospace" }} value={settingsDraft.highlightColor || "#c2f4fc"} onChange={e => setSettingsDraft(p => ({ ...p, highlightColor: e.target.value }))} /><div style={{ width: 60, height: 32, borderRadius: 4, border: `1px solid ${t.border}`, background: settingsDraft.highlightColor || "#c2f4fc" }} /></div></div>
+            <div style={{ marginBottom: 14 }}><label style={S.lbl}>Woodstock PDF Template</label><div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 4 }}><label style={{ ...S.btn(t.bg3, t.text), cursor: "pointer", border: `1px solid ${t.border}` }}>📄 Upload PDF<input type="file" accept=".pdf" style={{ display: "none" }} onChange={e => { const file = e.target.files?.[0]; if (!file) return; const reader = new FileReader(); reader.onload = () => { const b64 = reader.result.split(",")[1]; setSettingsDraft(p => ({ ...p, customPdfTemplate: b64 })); }; reader.readAsDataURL(file); e.target.value = ""; }} /></label>{settingsDraft.customPdfTemplate ? <><span style={{ fontSize: 11, color: t.greenText }}>✓ Custom template loaded</span><button style={S.sm(t.bg3, t.redText)} onClick={() => setSettingsDraft(p => ({ ...p, customPdfTemplate: "" }))}>Reset to default</button></> : <span style={{ fontSize: 11, color: t.textMuted }}>Using built-in John Bear template</span>}</div></div>
             <div style={{ marginBottom: 14 }}><label style={S.lbl}>Users</label>
               <div style={{ display: "flex", gap: 6, marginTop: 4, marginBottom: 8 }}><input style={{ ...S.mI, flex: 1, marginBottom: 0 }} placeholder="Add user name" value={newUserName} onChange={e => setNewUserName(e.target.value)} onKeyDown={e => { if (e.key === "Enter") { const n = newUserName.trim(); if (n && !(settingsDraft.users || []).includes(n)) { setSettingsDraft(p => ({ ...p, users: [...(p.users || []), n] })); setNewUserName(""); } } }} /><button style={S.btn(t.accent, "#fff")} onClick={() => { const n = newUserName.trim(); if (n && !(settingsDraft.users || []).includes(n)) { setSettingsDraft(p => ({ ...p, users: [...(p.users || []), n] })); setNewUserName(""); } }}>Add</button></div>
               {(settingsDraft.users || []).map(u => <div key={u} style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
