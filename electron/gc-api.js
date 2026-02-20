@@ -2,15 +2,21 @@
  * GlobalConnect API Module
  * Direct REST API access to pwbplus.vsp.autopartners.net
  *
- * Auth: Azure AD OAuth2 with interactive browser login
+ * Auth: Azure AD OAuth2 with PKCE + persistent sessions
+ *   - Refresh token saved to disk → survives app restart
+ *   - Persistent Electron session → Microsoft remembers your login
+ *   - Silent token refresh on startup → no login prompt if session valid
+ *
  * Endpoints:
  *   GET /api/rest/v1/orders/shipments?customerCode=X&fromDate=Y&toDate=Z
  *   GET /api/rest/v1/orders/answerbacks?customerCode=X&fromDate=Y&toDate=Z
  */
 
-const { BrowserWindow } = require("electron");
+const { BrowserWindow, app, session } = require("electron");
 const https = require("https");
 const crypto = require("crypto");
+const fs = require("fs");
+const path = require("path");
 
 // Azure AD / GM config
 const TENANT_ID = "5de110f8-2e0f-4d45-891d-bcf2218e253d";
@@ -20,10 +26,59 @@ const AUTH_BASE = `https://login.microsoftonline.com/${TENANT_ID}/oauth2/v2.0`;
 const API_BASE = "https://pwbplus.vsp.autopartners.net";
 const SCOPE = `api://${CLIENT_ID}/user_impersonation openid profile offline_access`;
 
-// Token state
+// Persistent session partition — keeps Microsoft login cookies across restarts
+const AUTH_PARTITION = "persist:gc-auth";
+
+// Token state (in-memory)
 let currentToken = null;
 let tokenExpiry = 0;
 let refreshToken = null;
+
+// ─── Token Persistence ──────────────────────────────────────────
+
+function getTokenPath() {
+  const userDataPath = app.getPath("userData");
+  return path.join(userDataPath, "gc-tokens.json");
+}
+
+function saveTokensToDisk() {
+  try {
+    const data = {
+      refreshToken: refreshToken || null,
+      tokenExpiry: tokenExpiry || 0,
+      // Don't save access token — it's short-lived, refresh on start
+      savedAt: Date.now(),
+    };
+    fs.writeFileSync(getTokenPath(), JSON.stringify(data, null, 2), "utf-8");
+  } catch (e) {
+    console.error("[gc-api] Failed to save tokens:", e.message);
+  }
+}
+
+function loadTokensFromDisk() {
+  try {
+    const tokenPath = getTokenPath();
+    if (!fs.existsSync(tokenPath)) return false;
+    const data = JSON.parse(fs.readFileSync(tokenPath, "utf-8"));
+    if (data.refreshToken) {
+      refreshToken = data.refreshToken;
+      console.log("[gc-api] Loaded refresh token from disk (saved", new Date(data.savedAt).toLocaleString(), ")");
+      return true;
+    }
+  } catch (e) {
+    console.error("[gc-api] Failed to load tokens:", e.message);
+  }
+  return false;
+}
+
+function clearTokensFromDisk() {
+  try {
+    const tokenPath = getTokenPath();
+    if (fs.existsSync(tokenPath)) fs.unlinkSync(tokenPath);
+  } catch (e) {
+    console.error("[gc-api] Failed to clear tokens:", e.message);
+  }
+}
 
 // ─── PKCE helpers ────────────────────────────────────────────────
 
@@ -44,6 +99,10 @@ function generateCodeChallenge(verifier) {
 /**
  * Open a browser window for Azure AD login, capture the auth code,
  * exchange it for an access token.
+ *
+ * Uses persist:gc-auth partition so Microsoft remembers the user —
+ * after first login, subsequent logins may auto-complete or just
+ * show account selection (no password re-entry).
  */
 async function interactiveLogin(parentWindow) {
   const codeVerifier = generateCodeVerifier();
@@ -73,6 +132,7 @@ async function interactiveLogin(parentWindow) {
       webPreferences: {
         nodeIntegration: false,
         contextIsolation: true,
+        partition: AUTH_PARTITION, // Persistent cookies!
       },
       title: "Sign in to GlobalConnect",
     });
@@ -89,7 +149,7 @@ async function interactiveLogin(parentWindow) {
         // After login, Azure redirects back to REDIRECT_URI with ?code=...
         if (parsed.origin === new URL(REDIRECT_URI).origin && parsed.searchParams.has("code")) {
           codeHandled = true;
-          // Stop the redirect from loading PWB+ app (race condition with SPA's MSAL)
+          // Stop the redirect from loading PWB+ app
           if (event && event.preventDefault) event.preventDefault();
 
           const code = parsed.searchParams.get("code");
@@ -110,6 +170,7 @@ async function interactiveLogin(parentWindow) {
             currentToken = tokens.access_token;
             refreshToken = tokens.refresh_token || null;
             tokenExpiry = Date.now() + (tokens.expires_in - 60) * 1000; // 60s buffer
+            saveTokensToDisk(); // Persist for next app start
             authWindow.close();
             resolve({
               success: true,
@@ -128,7 +189,6 @@ async function interactiveLogin(parentWindow) {
 
     authWindow.webContents.on("will-redirect", (event, url) => handleNavigation(event, url));
     authWindow.webContents.on("will-navigate", (event, url) => handleNavigation(event, url));
-    // Also check after page loads (some flows don't trigger will-redirect)
     authWindow.webContents.on("did-navigate", (event, url) => handleNavigation(null, url));
 
     authWindow.on("closed", () => {
@@ -206,13 +266,15 @@ async function refreshAccessToken() {
             currentToken = json.access_token;
             refreshToken = json.refresh_token || refreshToken;
             tokenExpiry = Date.now() + (json.expires_in - 60) * 1000;
+            saveTokensToDisk(); // Update persisted refresh token
             resolve({ success: true, expiresIn: json.expires_in });
           } else {
             // Refresh token expired — need fresh login
             currentToken = null;
             refreshToken = null;
             tokenExpiry = 0;
-            reject(new Error("Refresh token expired — please login again"));
+            clearTokensFromDisk();
+            reject(new Error("Session expired — please login again"));
           }
         } catch (e) { reject(e); }
       });
@@ -221,6 +283,26 @@ async function refreshAccessToken() {
     req.write(body);
     req.end();
   });
+}
+
+// ─── Initialize: Try Silent Auth on Startup ─────────────────────
+
+/**
+ * Call once after app.whenReady().
+ * Attempts to restore session from saved refresh token — no UI needed.
+ * Returns { success, user } or { success: false }.
+ */
+async function tryRestoreSession() {
+  if (!loadTokensFromDisk()) return { success: false, reason: "No saved session" };
+  try {
+    await refreshAccessToken();
+    const user = parseTokenUser(currentToken);
+    console.log("[gc-api] Session restored for", user?.name || user?.email || "user");
+    return { success: true, user, expiresIn: Math.floor((tokenExpiry - Date.now()) / 1000) };
+  } catch (e) {
+    console.log("[gc-api] Silent restore failed:", e.message);
+    return { success: false, reason: e.message };
+  }
 }
 
 // ─── Ensure Valid Token ─────────────────────────────────────────
@@ -268,7 +350,6 @@ function apiGet(endpoint, params) {
       res.on("data", (chunk) => data += chunk);
       res.on("end", () => {
         if (res.statusCode === 401) {
-          // Token expired mid-request
           currentToken = null;
           tokenExpiry = 0;
           reject(new Error("Token expired — please login again"));
@@ -288,16 +369,10 @@ function apiGet(endpoint, params) {
   });
 }
 
-/**
- * Fetch shipments for a date range
- */
 async function fetchShipments(customerCode, fromDate, toDate) {
   return apiGet("/api/rest/v1/orders/shipments", { customerCode, fromDate, toDate });
 }
 
-/**
- * Fetch answerbacks for a date range
- */
 async function fetchAnswerbacks(customerCode, fromDate, toDate) {
   return apiGet("/api/rest/v1/orders/answerbacks", { customerCode, fromDate, toDate });
 }
@@ -332,10 +407,20 @@ function logout() {
   currentToken = null;
   refreshToken = null;
   tokenExpiry = 0;
+  clearTokensFromDisk();
+
+  // Clear Microsoft login cookies so next login is fresh
+  try {
+    const ses = session.fromPartition(AUTH_PARTITION);
+    ses.clearStorageData({ storages: ["cookies", "localstorage"] });
+  } catch (e) {
+    console.error("[gc-api] Failed to clear session cookies:", e.message);
+  }
 }
 
 module.exports = {
   interactiveLogin,
+  tryRestoreSession,
   ensureToken,
   fetchShipments,
   fetchAnswerbacks,

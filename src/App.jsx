@@ -984,6 +984,14 @@ export default function App() {
     const check = () => window.electronAPI.gcTokenStatus().then(setGcTokenStatus);
     check();
     const interval = setInterval(check, 30000); // every 30s
+    // Listen for silent session restore on app startup
+    if (window.electronAPI.onGcSessionRestored) {
+      window.electronAPI.onGcSessionRestored((result) => {
+        if (result.success) {
+          setGcTokenStatus({ authenticated: true, expiresIn: result.expiresIn, hasRefreshToken: true, user: result.user });
+        }
+      });
+    }
     return () => clearInterval(interval);
   }, []);
 

@@ -36,6 +36,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   gcFetchShipments: (opts) => ipcRenderer.invoke("gc-fetch-shipments", opts),
   gcFetchAnswerbacks: (opts) => ipcRenderer.invoke("gc-fetch-answerbacks", opts),
   gcFetchAll: (opts) => ipcRenderer.invoke("gc-fetch-all", opts),
+  onGcSessionRestored: (callback) => ipcRenderer.on("gc-session-restored", (event, data) => callback(data)),
 
   // Check if running in Electron
   isElectron: true,

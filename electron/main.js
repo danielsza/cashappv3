@@ -51,7 +51,18 @@ function createWindow() {
   mainWindow.on("closed", () => { mainWindow = null; });
 }
 
-app.whenReady().then(() => { startSyncServer(); createWindow(); });
+app.whenReady().then(async () => {
+  startSyncServer();
+  createWindow();
+  // Try to silently restore GC session from saved refresh token
+  try {
+    const result = await gcApi.tryRestoreSession();
+    if (result.success) {
+      console.log("[main] GC session restored:", result.user?.name);
+      if (mainWindow) mainWindow.webContents.send("gc-session-restored", result);
+    }
+  } catch (e) { console.log("[main] GC silent restore skipped:", e.message); }
+});
 app.on("window-all-closed", () => { if (process.platform !== "darwin") app.quit(); });
 app.on("activate", () => { if (mainWindow === null) createWindow(); });
 app.on("before-quit", () => { if (serverProcess) serverProcess.kill(); });
