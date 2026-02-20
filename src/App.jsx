@@ -1,5 +1,4 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import * as XLSX from "xlsx";
 import ExcelJS from "exceljs";
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 import { WOODSTOCK_TEMPLATE_B64 } from "./woodstockTemplate.js";
@@ -73,17 +72,28 @@ function classifyScan(val) {
 }
 
 // ─── XLSX / CSV ──────────────────────────────────────────────────
-function parseXLSXFile(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      try {
-        const wb = XLSX.read(e.target.result, { type: "array" });
-        resolve(XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { defval: "" }));
-      } catch (err) { reject(err); }
-    };
-    reader.readAsArrayBuffer(file);
-  });
+async function parseXLSXFile(file) {
+  const buf = await file.arrayBuffer();
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.load(buf);
+  const ws = wb.worksheets[0];
+  if (!ws || ws.rowCount < 2) return [];
+  const headers = [];
+  ws.getRow(1).eachCell((cell, col) => { headers[col] = String(cell.value || "").trim(); });
+  const rows = [];
+  for (let r = 2; r <= ws.rowCount; r++) {
+    const row = ws.getRow(r);
+    const obj = {};
+    let hasData = false;
+    headers.forEach((h, col) => {
+      if (!h) return;
+      const v = row.getCell(col).value;
+      obj[h] = v != null ? (typeof v === "object" && v.result !== undefined ? v.result : v) : "";
+      if (v != null && v !== "") hasData = true;
+    });
+    if (hasData) rows.push(obj);
+  }
+  return rows;
 }
 
 function parseCSVText(text) {

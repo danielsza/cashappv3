@@ -167,15 +167,22 @@ gm-parts-receiving/
   START.bat               <-- Start the server for testing
   INSTALL-SERVICE.bat     <-- Install as auto-start Windows Service
   UNINSTALL-SERVICE.bat   <-- Remove the Windows Service
-  server.js               <-- Production web server
+  server.js               <-- Production web server + scanner sync API
   service-install.js      <-- Service installer logic
   service-uninstall.js    <-- Service uninstaller logic
-  package.json            <-- Dependencies
+  package.json            <-- Dependencies + scripts
   vite.config.js          <-- Build config
   index.html              <-- Entry HTML
   src/
     main.jsx              <-- React entry
     App.jsx               <-- Full application
+    woodstockTemplate.js  <-- Base64 PDF template (Woodstock form)
+  electron/
+    main.js               <-- Electron main process (Outlook COM, print)
+    preload.js            <-- Bridge between main & renderer
+  BUILD.md                <-- Quick reference build & deploy guide
+  SCANNER.md              <-- Detailed Datalogic scanner setup
+  ELECTRON.md             <-- Desktop app setup & packaging
 ```
 
 After running SETUP.bat, a `dist/` folder appears with the built app.
@@ -226,11 +233,15 @@ git push
 
 ---
 
+## Related Docs
+
+- **[BUILD.md](BUILD.md)** — Quick reference for building and deploying
+- **[SCANNER.md](SCANNER.md)** — Detailed Datalogic scanner configuration
+- **[ELECTRON.md](ELECTRON.md)** — Desktop app (Electron) setup and packaging
+
 ## Future Enhancements
 
-- [ ] Scan data sync between scanner and workstation over WebSocket
-- [ ] Electron wrapper for native Outlook COM integration
-- [ ] Export scan session to CSV
 - [ ] GM GlobalConnect API for automatic PWB+ data
 - [ ] Multi-store support
+- [ ] WebSocket sync (replace polling)
 - [ ] Linux server deployment
