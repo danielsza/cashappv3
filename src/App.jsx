@@ -44,6 +44,8 @@ const DEFAULTS = {
   showBinLocations: true, showPartNames: true,
   imapHost: "", imapPort: 993, imapSecure: true, imapUser: "", imapPass: "",
   imapSender: "", imapSubject: "",
+  gcApiToken: "", gcApiBase: "https://pwbplus.vsp.autopartners.net",
+  gcCustomerCode: "", gcApiEnabled: false,
 };
 
 // ─── Barcode Helpers ─────────────────────────────────────────────
@@ -309,6 +311,123 @@ async function parseXLSXWithSheets(file) {
     results.push({ sheetName: ws.name, rows });
   }
   return results;
+}
+
+// ─── GlobalConnect Direct API Fetch ──────────────────────────────
+
+const GC_API_ENDPOINTS = {
+  shipments: "/api/rest/v1/orders/shipments",
+  answerbacks: "/api/rest/v1/orders/answerbacks",
+  generatedReports: "/api/rest/v1/generated-reports",
+};
+
+async function fetchGcApi(baseUrl, token, endpoint, params = {}) {
+  const url = new URL(endpoint, baseUrl);
+  Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v));
+
+  // Try direct fetch first (CORS: Access-Control-Allow-Origin: *)
+  // Fall back to Electron proxy if CORS blocked
+  const headers = { "Authorization": `Bearer ${token}`, "Accept": "application/json" };
+
+  try {
+    const res = await fetch(url.toString(), { headers, mode: "cors" });
+    if (res.status === 401) throw new Error("Token expired — paste a fresh one from browser DevTools");
+    if (!res.ok) throw new Error(`API ${res.status}: ${res.statusText}`);
+    return await res.json();
+  } catch (err) {
+    // If CORS blocks, try via Electron proxy
+    if (window.electronAPI?.isElectron && err.message.includes("Failed to fetch")) {
+      const result = await window.electronAPI.proxyFetch({ url: url.toString(), headers });
+      if (result.error) throw new Error(result.error);
+      return JSON.parse(result.body);
+    }
+    throw err;
+  }
+}
+
+// Parse shipments JSON from API into our normalized format
+function parseShipmentsJson(data, customerCode) {
+  const byControl = {};
+  const items = Array.isArray(data) ? data : (data.content || data.shipments || data.items || [data]);
+
+  for (const row of items) {
+    const ctrl = String(row.controlNumber || row.poControlNumber || row.control || "").trim();
+    if (!ctrl) continue;
+    if (!byControl[ctrl]) byControl[ctrl] = { ctrl, order: "", shipments: {}, enrichment: {} };
+    const order = String(row.orderNumber || "").trim();
+    if (order) byControl[ctrl].order = order;
+
+    const shipNo = String(row.shipmentNumber || row.shipNo || "").trim();
+    const partShipped = String(row.partNumberShipped || row.partShipped || "").replace(/\s/g, "");
+    const partOrdered = String(row.partNumberOrdered || row.partOrdered || "").replace(/\s/g, "");
+    const shipQty = parseFloat(row.partPiecesShipped || row.qtyShipped || 0);
+    const ordQty = parseFloat(row.partPiecesOrdered || row.qtyOrdered || 0);
+    const facility = String(row.facility || "").trim();
+    const bin = String(row.binLocation || row.bin || "").trim();
+    const carrier = String(row.carrier || "").trim();
+    const partName = String(row.partName || row.partDescription || "").trim();
+    const tracking = String(row.trackingNumber || row.trackingNumbers || "").trim();
+    const itemNo = parseInt(row.orderItemNumber || row.lineItemNumber || 0);
+
+    const key = `${shipNo}|${partShipped}|${itemNo}`;
+    if (!byControl[ctrl].shipments[key]) {
+      byControl[ctrl].shipments[key] = {
+        shipmentNo: shipNo, partShipped, partOrdered, qtyShipped: 0, qtyOrdered: ordQty,
+        facility, bin, carrier, partName, tracking, itemNo, pieceCount: 0,
+      };
+    }
+    byControl[ctrl].shipments[key].qtyShipped += shipQty;
+    byControl[ctrl].shipments[key].pieceCount += 1;
+
+    if (!byControl[ctrl].enrichment[partShipped]) {
+      byControl[ctrl].enrichment[partShipped] = { bin, carrier, partName, tracking, shipmentNo: shipNo };
+    }
+  }
+  return byControl;
+}
+
+// Parse answerbacks JSON from API into our normalized format
+function parseAnswerbacksJson(data, customerCode) {
+  const byControl = {};
+  const items = Array.isArray(data) ? data : (data.content || data.answerbacks || data.items || [data]);
+
+  for (const row of items) {
+    const ctrl = String(row.poControlNumber || row.controlNumber || "").trim();
+    if (!ctrl) continue;
+    if (!byControl[ctrl]) byControl[ctrl] = { ctrl, order: "", facility: "", lines: [] };
+    const order = String(row.orderNumber || "").trim();
+    if (order) byControl[ctrl].order = order;
+
+    const code = parseInt(row.statusCode || row.status || 0);
+    const status = ANSWERBACK_STATUS[code] || String(row.statusMessage || row.statusDescription || `Code ${code}`);
+    const partOrdered = String(row.partNumberOrdered || "").replace(/\s/g, "");
+    const partWritten = String(row.partNumberWritten || row.partNumberProcessed || "").replace(/\s/g, "");
+    const qtyOrdered = parseInt(row.qtyOrdered || row.quantityOrdered || 0);
+    const qtyProc = parseInt(row.qtyProcessed || row.quantityProcessed || 0);
+    const lineItem = parseInt(row.lineItemNumber || 0);
+    const fac = String(row.facility || "").trim();
+
+    const priority = { "Shipped": 1, "Backordered": 2, "Cancelled": 3, "Superseded": 4,
+      "Ship Direct": 5, "Referred": 6, "Controlled Part": 7, "Order Received": 8 };
+    const existing = byControl[ctrl].lines.find(l => l.partOrdered === partOrdered && l.lineItem === lineItem);
+    if (existing) {
+      const oldP = priority[existing.status] || 99;
+      const newP = priority[status] || 99;
+      if (newP < oldP) {
+        existing.status = status; existing.statusCode = code; existing.qtyProc = qtyProc;
+      }
+      continue;
+    }
+
+    byControl[ctrl].lines.push({
+      status, statusCode: code, statusMsg: row.statusMessage || "",
+      partOrdered, partProcessed: partWritten,
+      facility: fac, qtyOrdered, qtyProc, lineItem,
+      shipmentNo: "",
+      superseded: partOrdered !== partWritten && partWritten !== "" && partOrdered !== "",
+    });
+  }
+  return byControl;
 }
 
 // ─── GM Logo (base64 PNG) ────────────────────────────────────────
@@ -855,6 +974,66 @@ export default function App() {
     }
   }, [settings.gcImportFolder, processGcBase64]);
 
+  // ─── GlobalConnect Direct API ───
+  const [gcTokenStatus, setGcTokenStatus] = useState(null);
+  const [gcFetching, setGcFetching] = useState(false);
+
+  // Check token status on mount and periodically
+  useEffect(() => {
+    if (!window.electronAPI?.gcTokenStatus) return;
+    const check = () => window.electronAPI.gcTokenStatus().then(setGcTokenStatus);
+    check();
+    const interval = setInterval(check, 30000); // every 30s
+    return () => clearInterval(interval);
+  }, []);
+
+  const gcApiLogin = async () => {
+    if (!window.electronAPI?.gcLogin) { showFB("API login requires Electron desktop app", t.red); return; }
+    try {
+      showFB("Opening GlobalConnect login…", t.accent);
+      const res = await window.electronAPI.gcLogin();
+      if (res.success) {
+        showFB(`✓ Logged in as ${res.user?.name || res.user?.email || "user"}`, t.green);
+        setGcTokenStatus({ authenticated: true, expiresIn: res.expiresIn, user: res.user });
+      } else {
+        showFB(`Login failed: ${res.error}`, t.red);
+      }
+    } catch (err) { showFB(`Login error: ${err.message}`, t.red); }
+  };
+
+  const gcApiFetch = async (daysBack = 1) => {
+    if (!window.electronAPI?.gcFetchAll) { showFB("API fetch requires Electron desktop app", t.red); return; }
+    const cc = settings.gcCustomerCode;
+    if (!cc) { showFB("Set Customer Code in Settings → Import first", t.red); return; }
+    setGcFetching(true);
+    try {
+      const toDate = new Date().toISOString().slice(0, 10);
+      const fromDate = new Date(Date.now() - daysBack * 86400000).toISOString().slice(0, 10);
+      showFB(`Fetching GC data ${fromDate} → ${toDate}…`, t.accent);
+      const res = await window.electronAPI.gcFetchAll({ customerCode: cc, fromDate, toDate });
+      if (!res.success) { showFB(`API error: ${res.error}`, t.red); setGcFetching(false); return; }
+      let msg = [];
+      if (res.answerbacks) {
+        const parsed = parseAnswerbacksJson(res.answerbacks);
+        const count = Object.values(parsed).reduce((s, p) => s + p.lines.length, 0);
+        setGcAnswerbacks(prev => ({ ...(prev || {}), ...parsed }));
+        msg.push(`📋 ${count} answerback lines`);
+      }
+      if (res.answerbacksError) msg.push(`⚠ Answerbacks: ${res.answerbacksError}`);
+      if (res.shipments) {
+        const parsed = parseShipmentsJson(res.shipments);
+        setGcShipments(prev => ({ ...(prev || {}), ...parsed }));
+        const shipCount = Object.keys(parsed).length;
+        msg.push(`📦 ${shipCount} shipment POs`);
+      }
+      if (res.shipmentsError) msg.push(`⚠ Shipments: ${res.shipmentsError}`);
+      showFB(`✓ ${msg.join("  ")}`, t.green);
+      // Refresh token status
+      window.electronAPI.gcTokenStatus().then(setGcTokenStatus);
+    } catch (err) { showFB(`Fetch error: ${err.message}`, t.red); }
+    setGcFetching(false);
+  };
+
   const handleFileUpload = async (e) => {
     for (const file of Array.from(e.target.files)) {
       try {
@@ -1148,6 +1327,20 @@ td{padding:3px 6px;font-size:9pt}
                 <strong>Exchange On-Prem:</strong> Your mail server hostname:993
               </div>
             </div>
+
+            <div style={{ fontSize: 12, fontWeight: 700, color: t.text, marginBottom: 8, marginTop: 16 }}>⚡ GlobalConnect Direct API</div>
+            <div style={{ background: t.bg0, border: `1px solid ${t.border}`, borderRadius: 6, padding: 10, marginBottom: 12 }}>
+              <div style={{ display: "flex", gap: 16, marginBottom: 10 }}>
+                <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: t.text, cursor: "pointer" }}><input type="checkbox" checked={settingsDraft.gcApiEnabled || false} onChange={e => setSettingsDraft(p => ({ ...p, gcApiEnabled: e.target.checked }))} /> Enable API Fetch</label>
+              </div>
+              <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+                <div style={{ flex: 1 }}><label style={{ fontSize: 9, color: t.textFaint }}>Customer Code</label><input style={{ ...S.mI, marginBottom: 0, fontSize: 11, fontFamily: "monospace" }} placeholder="095207" value={settingsDraft.gcCustomerCode || ""} onChange={e => setSettingsDraft(p => ({ ...p, gcCustomerCode: e.target.value }))} /></div>
+              </div>
+              <div style={{ fontSize: 10, color: t.textMuted, lineHeight: 1.5, marginTop: 6 }}>
+                Fetches shipment and answerback data directly from <strong>pwbplus.vsp.autopartners.net</strong> via the REST API. Requires a one-time login via your GM credentials — the session refreshes automatically for ~1 hour. Click "⚡ Fetch GC" in the Compare tab to pull today's data.
+              </div>
+              {gcTokenStatus?.authenticated && <div style={{ marginTop: 8, padding: 6, background: `${t.green}15`, border: `1px solid ${t.green}30`, borderRadius: 4, fontSize: 10, color: t.greenText }}>🟢 Authenticated as <strong>{gcTokenStatus.user?.name}</strong> — token expires in {Math.floor((gcTokenStatus.expiresIn || 0) / 60)} minutes</div>}
+            </div>
           </>)}
           {settingsTab === "dealers" && (<>
             <div style={{ marginBottom: 12, fontSize: 11, color: t.textMuted }}>Dealer directory for wrong-dealer ID and email CC.</div>
@@ -1272,9 +1465,9 @@ td{padding:3px 6px;font-size:9pt}
           </div>
         </>)}
         {wsTab === "compare" && (<>
-          <div style={S.card}><div style={S.cH}><span style={S.cL}>POs ({purchaseOrders.length})</span><label style={{ ...S.btn(t.accent, "#fff"), cursor: "pointer" }}>+ XLSX<input ref={fileInputRef} type="file" accept=".xlsx,.xls,.csv" multiple onChange={handleFileUpload} style={{ display: "none" }} /></label></div>
+          <div style={S.card}><div style={S.cH}><span style={S.cL}>POs ({purchaseOrders.length})</span><div style={{ display: "flex", gap: 6, alignItems: "center" }}>{window.electronAPI?.gcFetchAll && settings.gcApiEnabled && <button style={{ padding: "5px 12px", background: gcTokenStatus?.authenticated ? "#059669" : t.bg3, color: gcTokenStatus?.authenticated ? "#fff" : t.textMuted, border: `1px solid ${gcTokenStatus?.authenticated ? "#059669" : t.border}`, borderRadius: 6, fontFamily: ff, fontSize: 11, fontWeight: 600, cursor: gcFetching ? "wait" : "pointer", opacity: gcFetching ? 0.6 : 1 }} disabled={gcFetching} onClick={() => gcTokenStatus?.authenticated ? gcApiFetch(1) : gcApiLogin()}>{gcFetching ? "⏳ Fetching…" : gcTokenStatus?.authenticated ? "⚡ Fetch GC" : "🔑 Login GC"}</button>}<label style={{ ...S.btn(t.accent, "#fff"), cursor: "pointer" }}>+ XLSX<input ref={fileInputRef} type="file" accept=".xlsx,.xls,.csv" multiple onChange={handleFileUpload} style={{ display: "none" }} /></label></div></div>
             {purchaseOrders.length > 0 && <div style={{ padding: "8px 12px", display: "flex", gap: 6, flexWrap: "wrap", borderBottom: `1px solid ${t.border}` }}><button style={{ padding: "5px 10px", background: activePO === "__all__" ? t.accentBg : t.bg3, border: `1px solid ${activePO === "__all__" ? t.accent : t.border}`, borderRadius: 4, cursor: "pointer", fontSize: 11, color: activePO === "__all__" ? t.accentText : t.textMuted, fontFamily: ff }} onClick={() => setActivePO("__all__")}>All</button>{purchaseOrders.map(po => <button key={po.id} style={{ padding: "5px 10px", background: activePO === po.pbsPO ? t.accentBg : t.bg3, border: `1px solid ${activePO === po.pbsPO ? t.accent : t.border}`, borderRadius: 4, cursor: "pointer", fontSize: 11, color: activePO === po.pbsPO ? t.accentText : t.textMuted, fontFamily: ff, display: "flex", alignItems: "center", gap: 6 }} onClick={() => setActivePO(po.pbsPO)}><strong>{po.pbsPO}</strong>{po.gmControl && ` · ${po.gmControl}`}{po.source === "gc" && <span style={{ fontSize: 8, background: "#059669", color: "#fff", borderRadius: 3, padding: "1px 4px", fontWeight: 700 }}>GC</span>}<span style={S.sm("transparent", t.textFaint)} onClick={e => { e.stopPropagation(); removePO(po.id); }}>✕</span></button>)}</div>}
-            {(gcAnswerbacks || gcShipments) && <div style={{ padding: "4px 12px", borderBottom: `1px solid ${t.border}`, fontSize: 10, color: t.textMuted, display: "flex", gap: 12 }}>{gcAnswerbacks && <span>📋 Answerbacks: {Object.keys(gcAnswerbacks).length} POs</span>}{gcShipments && <span>📦 Shipments: {Object.keys(gcShipments).length} POs</span>}</div>}
+            {(gcAnswerbacks || gcShipments) && <div style={{ padding: "4px 12px", borderBottom: `1px solid ${t.border}`, fontSize: 10, color: t.textMuted, display: "flex", gap: 12, alignItems: "center" }}>{gcAnswerbacks && <span>📋 Answerbacks: {Object.keys(gcAnswerbacks).length} POs</span>}{gcShipments && <span>📦 Shipments: {Object.keys(gcShipments).length} POs</span>}{gcTokenStatus?.authenticated && <span style={{ marginLeft: "auto", color: t.greenText }}>🟢 {gcTokenStatus.user?.name || "Connected"} ({Math.floor(gcTokenStatus.expiresIn / 60)}m)</span>}</div>}
             <details style={{ borderTop: `1px solid ${t.border}` }}><summary style={{ padding: "8px 12px", cursor: "pointer", fontSize: 11, color: t.textMuted }}>Paste CSV</summary><div style={{ padding: 12 }}><input style={S.inp} value={csvPO} onChange={e => setCsvPO(e.target.value)} placeholder="PO Name" /><textarea style={{ width: "100%", padding: 10, background: t.bgInput, border: `1px solid ${t.border}`, borderRadius: 4, color: t.text, fontFamily: ff, fontSize: 12, minHeight: 80, resize: "vertical", boxSizing: "border-box", marginTop: 6 }} value={csvText} onChange={e => setCsvText(e.target.value)} placeholder="Paste..." /><button style={{ ...S.btn(t.accent, "#fff"), marginTop: 6 }} onClick={handleCSVPaste}>Load</button></div></details>
           </div>
           {purchaseOrders.length > 0 && (<><div style={{ display: "flex", gap: 8, marginBottom: 10, alignItems: "center" }}><span style={{ fontSize: 10, color: t.textMuted, fontWeight: 600 }}>SHIPMENT:</span><select style={S.sel} value={selectedShipment} onChange={e => setSelectedShipment(e.target.value)}><option value="all">All</option>{getShipNums().map(sn => <option key={sn} value={sn}>{sn}</option>)}</select><button style={{ padding: "6px 14px", background: "#e91e90", color: "#fff", border: "none", borderRadius: 6, fontFamily: ff, fontSize: 11, fontWeight: 600, cursor: "pointer", marginLeft: "auto" }} onClick={downloadPinkSheet}>🖨 Pink Sheet</button></div>

@@ -2,6 +2,7 @@ const { app, BrowserWindow, ipcMain, dialog, shell } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const { spawn } = require("child_process");
+const gcApi = require("./gc-api");
 
 // Keep a global reference to prevent garbage collection
 let mainWindow;
@@ -357,6 +358,102 @@ ipcMain.handle("imap-test", async (event, { host, port, secure, user, pass }) =>
     const mailbox = await client.status("INBOX", { messages: true, unseen: true });
     await client.logout();
     return { success: true, messages: mailbox.messages, unseen: mailbox.unseen };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
+// ─── Proxy Fetch (CORS bypass for GM API) ────────────────────────
+ipcMain.handle("proxy-fetch", async (event, { url, headers }) => {
+  try {
+    const https = require("https");
+    const { URL } = require("url");
+    const parsed = new URL(url);
+
+    return new Promise((resolve) => {
+      const req = https.request({
+        hostname: parsed.hostname,
+        port: parsed.port || 443,
+        path: parsed.pathname + parsed.search,
+        method: "GET",
+        headers: headers || {},
+      }, (res) => {
+        const chunks = [];
+        res.on("data", (c) => chunks.push(c));
+        res.on("end", () => {
+          const body = Buffer.concat(chunks).toString("utf-8");
+          if (res.statusCode === 401) {
+            resolve({ error: "Token expired — paste a fresh one from browser DevTools" });
+          } else if (res.statusCode >= 400) {
+            resolve({ error: `API ${res.statusCode}: ${body.substring(0, 200)}` });
+          } else {
+            resolve({ body, statusCode: res.statusCode });
+          }
+        });
+      });
+      req.on("error", (err) => resolve({ error: err.message }));
+      req.end();
+    });
+  } catch (err) {
+    return { error: err.message };
+  }
+});
+
+// ─── GlobalConnect Direct API ────────────────────────────────────
+
+ipcMain.handle("gc-login", async () => {
+  try {
+    const result = await gcApi.interactiveLogin(mainWindow);
+    return result;
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle("gc-token-status", async () => {
+  return gcApi.getTokenStatus();
+});
+
+ipcMain.handle("gc-logout", async () => {
+  gcApi.logout();
+  return { success: true };
+});
+
+ipcMain.handle("gc-fetch-shipments", async (event, { customerCode, fromDate, toDate }) => {
+  try {
+    await gcApi.ensureToken(mainWindow);
+    const data = await gcApi.fetchShipments(customerCode, fromDate, toDate);
+    return { success: true, data };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle("gc-fetch-answerbacks", async (event, { customerCode, fromDate, toDate }) => {
+  try {
+    await gcApi.ensureToken(mainWindow);
+    const data = await gcApi.fetchAnswerbacks(customerCode, fromDate, toDate);
+    return { success: true, data };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
+// Fetch both shipments + answerbacks in one call
+ipcMain.handle("gc-fetch-all", async (event, { customerCode, fromDate, toDate }) => {
+  try {
+    await gcApi.ensureToken(mainWindow);
+    const [shipments, answerbacks] = await Promise.allSettled([
+      gcApi.fetchShipments(customerCode, fromDate, toDate),
+      gcApi.fetchAnswerbacks(customerCode, fromDate, toDate),
+    ]);
+    return {
+      success: true,
+      shipments: shipments.status === "fulfilled" ? shipments.value : null,
+      answerbacks: answerbacks.status === "fulfilled" ? answerbacks.value : null,
+      shipmentsError: shipments.status === "rejected" ? shipments.reason.message : null,
+      answerbacksError: answerbacks.status === "rejected" ? answerbacks.reason.message : null,
+    };
   } catch (err) {
     return { success: false, error: err.message };
   }

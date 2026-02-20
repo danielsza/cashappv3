@@ -26,6 +26,17 @@ contextBridge.exposeInMainWorld("electronAPI", {
   imapFetch: (opts) => ipcRenderer.invoke("imap-fetch", opts),
   imapTest: (opts) => ipcRenderer.invoke("imap-test", opts),
 
+  // Proxy fetch (CORS bypass for GM API)
+  proxyFetch: (opts) => ipcRenderer.invoke("proxy-fetch", opts),
+
+  // GlobalConnect Direct API (MSAL auth + REST)
+  gcLogin: () => ipcRenderer.invoke("gc-login"),
+  gcTokenStatus: () => ipcRenderer.invoke("gc-token-status"),
+  gcLogout: () => ipcRenderer.invoke("gc-logout"),
+  gcFetchShipments: (opts) => ipcRenderer.invoke("gc-fetch-shipments", opts),
+  gcFetchAnswerbacks: (opts) => ipcRenderer.invoke("gc-fetch-answerbacks", opts),
+  gcFetchAll: (opts) => ipcRenderer.invoke("gc-fetch-all", opts),
+
   // Check if running in Electron
   isElectron: true,
 });
