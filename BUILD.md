@@ -1,134 +1,215 @@
-# Quick Reference — Build & Deploy
+# Quick Reference — Build, Test & Deploy
 
-## 🔧 Development (Testing Changes)
+## Prerequisites
+
+- **Node.js ≥ 18** — [nodejs.org](https://nodejs.org) (LTS recommended)
+- **Git** — for pulling updates
+- **macOS or Windows** — Electron works on both
 
 ```bash
-# Pull latest
-cd C:\gm-parts-receiving
-git pull
+# Verify
+node --version   # should be 18+
+npm --version    # should be 9+
+```
 
-# Install deps (only needed if package.json changed)
+---
+
+## 🔧 Step 1: Clone & Install
+
+```bash
+# First time only
+git clone https://github.com/danielsza/gm-parts-receiving.git
+cd gm-parts-receiving
 npm install
-
-# Start dev server with hot reload
-npm run dev
-# → opens http://localhost:5173
 ```
 
-## 🌐 Web App Build (Scanner + Browser)
+```bash
+# Subsequent updates
+cd gm-parts-receiving      # or wherever you cloned it
+git pull
+npm install                 # only needed if package.json changed
+```
+
+---
+
+## 🌐 Step 2: Build the Web App
 
 ```bash
-# Build production bundle
 npm run build
-
-# Start production server
-npm run serve
-# → http://localhost:3000 (workstation)
-# → http://YOUR_IP:3000 (scanner)
 ```
 
-## 🖥️ Desktop App (Electron)
+This compiles `src/App.jsx` → `dist/` (static HTML/JS bundle). Takes ~6 seconds.
+
+---
+
+## 🖥️ Step 3: Run in Electron (Desktop App)
+
+### Quick Start (Dev Mode)
 
 ```bash
-# Dev mode (hot reload + DevTools)
-# Terminal 1:
-npm run serve
-# Terminal 2:
+# One command — starts Vite dev server + Electron together
 npm run electron-dev
-
-# --- OR start pieces manually: ---
-# Terminal 1: npm run dev
-# Terminal 2: npm run serve
-# Terminal 3: npm run electron-start
 ```
 
+This runs `vite` on port 5173, waits for it, then launches Electron with DevTools open. Hot-reloads on file changes.
+
+### Manual Start (if the above doesn't work)
+
 ```bash
-# Package for Windows (installer + portable)
+# Terminal 1: Start the web dev server
+npm run dev
+
+# Terminal 2: Start Electron pointed at dev server
+npm run electron-start
+```
+
+### Production Mode (no DevTools)
+
+```bash
+npm run build
+npx electron .
+```
+
+---
+
+## ⚡ Step 4: Test GlobalConnect API
+
+1. Launch the Electron app (Step 3)
+2. Click the **⚙ Settings** gear icon
+3. Go to **Import** tab
+4. Scroll to **⚡ GlobalConnect Direct API**
+5. Check **Enable API Fetch**
+6. Set **Customer Code** to `095207`
+7. Click **🔑 Login to PWB+**
+   - A Microsoft login popup opens
+   - Sign in with your GM/VSP credentials (same as PWB+ website)
+   - After login, the popup shows "🔐 Signing in..." then closes
+8. Green status bar should appear: "🟢 Authenticated as SZAJKOWSKI, DANIEL"
+9. Click **⚡ Test Fetch** to pull today's data
+10. Click **Save** to persist settings
+
+### After First Login
+
+- **Refresh token** saved to `~/Library/Application Support/gm-parts-receiving/gc-tokens.json` (macOS) or `%APPDATA%/gm-parts-receiving/gc-tokens.json` (Windows)
+- **Microsoft cookies** persist in Electron session
+- On next app start, session restores silently — no login needed
+- Token auto-refreshes for ~90 days before needing fresh login
+- Click **🔓 Logout** to clear saved credentials + cookies
+
+### Using the Fetcher
+
+Once logged in, go to the **Compare** tab:
+- **⚡ Fetch GC** button appears (green when authenticated)
+- Click it → pulls shipments + answerbacks for today
+- Data merges into PO list automatically
+- Pink sheet generates with all enrichment (bin, descriptions, shipment numbers)
+- Ship Direct lines (DS-xxx) treated as shipped for matching
+
+---
+
+## 📱 Step 5: Test Scanner (Optional)
+
+```bash
+# Terminal 1: Start the sync server
+npm run serve
+# → http://localhost:3000
+
+# Terminal 2: Start Electron app
+npm run electron-start
+```
+
+On the scanner device:
+1. Connect to same WiFi as workstation
+2. Open Chrome → `http://WORKSTATION_IP:3000`
+3. Tap **Scanner** mode
+4. Scan a barcode — it should appear in the Electron app's scan list
+
+---
+
+## 📦 Package for Distribution
+
+### Windows Installer
+
+```bash
 npm run electron-build
 # → release/GM Parts Receiving Setup X.X.X.exe
 # → release/GM Parts Receiving X.X.X.exe (portable)
 ```
 
+### macOS (add to package.json build section if needed)
+
+```bash
+npx electron-builder --mac
+# → release/GM Parts Receiving-X.X.X.dmg
+```
+
+Note: macOS builds need to run on macOS. Windows builds need Windows (or CI).
+
+---
+
 ## ⚙️ Windows Service (Auto-Start Scanner Server)
 
 ```bash
-# Build first
 npm run build
 
 # Install service (run as Administrator)
 npm run install-service
 # → Creates "GM Parts Receiving" in Windows Services
-# → Auto-starts on boot, restarts on crash
 
-# Remove service (run as Administrator)
+# Remove service
 npm run uninstall-service
 ```
 
-To manage: `Win+R` → `services.msc` → find "GM Parts Receiving"
+Manage: `Win+R` → `services.msc` → "GM Parts Receiving"
 
-## 📦 Deploy to a New Workstation
-
-### Option A: From Git
-```bash
-git clone https://github.com/danielsza/gm-parts-receiving.git
-cd gm-parts-receiving
-npm install
-npm run build
-# Then either:
-npm run serve                  # manual start
-npm run install-service        # auto-start as service (admin)
-```
-
-### Option B: SETUP.bat (No Git)
-1. Copy the folder to the new PC
-2. Double-click `SETUP.bat`
-3. Double-click `START.bat` to test
-4. Right-click `INSTALL-SERVICE.bat` → Run as Admin
-
-## 📱 Deploy Scanner
-
-1. Connect scanner to same WiFi as workstation
-2. Open Chrome → `http://WORKSTATION_IP:3000`
-3. Tap **Scanner** mode
-4. Configure barcode: Keyboard Wedge + CR suffix
-5. Set as homepage / bookmark
-6. See `SCANNER.md` for full details
-
-## 🔄 Update After Changes
-
-```bash
-# On the workstation
-cd C:\gm-parts-receiving
-git pull
-npm run build
-
-# If running as service, restart it:
-# services.msc → "GM Parts Receiving" → Restart
-# Or:
-net stop "GM Parts Receiving"
-net start "GM Parts Receiving"
-```
+---
 
 ## 📂 Key Files
 
 | File | Purpose |
 |------|---------|
-| `src/App.jsx` | The entire React app |
-| `src/woodstockTemplate.js` | Base64 PDF template |
-| `server.js` | Production server + scanner sync API |
-| `electron/main.js` | Electron main process |
-| `electron/preload.js` | Electron bridge to renderer |
-| `service-install.js` | Windows Service installer |
-| `vite.config.js` | Build config |
-| `package.json` | Dependencies + scripts |
+| `src/App.jsx` | The entire React app (UI, parsers, pink sheet, matching) |
+| `src/woodstockTemplate.js` | Base64 Woodstock PDF template |
+| `electron/main.js` | Electron main process (IPC handlers, folder watcher, IMAP) |
+| `electron/gc-api.js` | **GlobalConnect API** (Azure AD auth, PKCE, token refresh, REST calls) |
+| `electron/preload.js` | Electron bridge — exposes APIs to renderer |
+| `server.js` | Production server + scanner sync WebSocket API |
+| `vite.config.js` | Build config (React, proxy, base path) |
+| `package.json` | Dependencies, scripts, electron-builder config |
 
-## 🚨 Common Issues
+### Token Storage Locations
+
+| OS | Path |
+|----|------|
+| macOS | `~/Library/Application Support/gm-parts-receiving/gc-tokens.json` |
+| Windows | `%APPDATA%/gm-parts-receiving/gc-tokens.json` |
+| Linux | `~/.config/gm-parts-receiving/gc-tokens.json` |
+
+---
+
+## 🚨 Troubleshooting
 
 | Issue | Fix |
 |-------|-----|
 | `npm: command not found` | Install Node.js from nodejs.org |
-| Port 3000 in use | `netstat -ano \| findstr :3000` → kill the process |
-| Scanner can't connect | Windows Firewall → allow port 3000 TCP inbound |
-| Electron not found | `npm install` (electron is in devDependencies) |
-| Service won't install | Must run as Administrator |
-| Build fails | `npm install` first, check Node.js version ≥ 18 |
+| `electron: command not found` | Run `npm install` (electron is a devDependency) |
+| Port 3000 in use | `lsof -i :3000` (macOS) or `netstat -ano \| findstr :3000` (Windows) |
+| Scanner can't connect | Firewall → allow port 3000 TCP inbound |
+| GC Login popup closes instantly | Check console for auth errors; try **🔓 Logout** then login again |
+| "Token expired" on fetch | Click **🔑 Login** again — refresh token may have expired |
+| "AADSTS..." error in login popup | Scope mismatch — share the full error message |
+| Service won't install | Must run terminal as Administrator |
+| Build fails | `rm -rf node_modules && npm install` then `npm run build` |
+| `ELECTRON_DEV` not working | Install `cross-env`: `npm install cross-env --save-dev` |
+
+---
+
+## 🔄 Quick Update Workflow
+
+```bash
+cd gm-parts-receiving
+git pull
+npm install          # if deps changed
+npm run build        # rebuild web bundle
+# Restart Electron or service
+```
