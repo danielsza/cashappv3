@@ -619,7 +619,7 @@ td{padding:3px 6px;font-size:9pt}
 .pink{background:#ff80ff;font-weight:bold}
 .notes{font-size:8pt;color:#555}
 .circ{display:inline-block;min-width:18px;text-align:center;padding:1px 6px;font-weight:bold;border-radius:50%;border:2px solid #000}
-.qty-diff{background:#ffff99}
+.qty-diff{background:#9999ff}
 </style></head><body>`;
       for (const po of pos) {
         const allRows = po.data;
