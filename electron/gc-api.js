@@ -18,7 +18,7 @@ const CLIENT_ID = "e5571be0-a422-45b0-91e0-1c6680a6e403";
 const REDIRECT_URI = "https://pwbplus.vsp.autopartners.net";
 const AUTH_BASE = `https://login.microsoftonline.com/${TENANT_ID}/oauth2/v2.0`;
 const API_BASE = "https://pwbplus.vsp.autopartners.net";
-const SCOPE = `api://${CLIENT_ID}/.default openid profile offline_access`;
+const SCOPE = `api://${CLIENT_ID}/user_impersonation openid profile offline_access`;
 
 // Token state
 let currentToken = null;
