@@ -10,9 +10,17 @@ contextBridge.exposeInMainWorld("electronAPI", {
 
   // File dialogs
   saveDialog: (opts) => ipcRenderer.invoke("save-dialog", opts),
+  browseFolder: () => ipcRenderer.invoke("browse-folder"),
 
   // App info
   getAppInfo: () => ipcRenderer.invoke("get-app-info"),
+
+  // Auto-import: folder watcher
+  watchFolder: (opts) => ipcRenderer.invoke("watch-folder", opts),
+  onGcFileDetected: (callback) => ipcRenderer.on("gc-file-detected", (event, data) => callback(data)),
+
+  // Auto-import: Outlook attachment extractor
+  extractOutlookAttachments: (opts) => ipcRenderer.invoke("extract-outlook-attachments", opts),
 
   // Check if running in Electron
   isElectron: true,

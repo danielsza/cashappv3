@@ -151,3 +151,97 @@ ipcMain.handle("get-app-info", async () => {
     isElectron: true,
   };
 });
+
+// ─── Auto-Import: Folder Watcher ─────────────────────────────────
+let watchedFolder = null;
+let folderWatcher = null;
+
+ipcMain.handle("watch-folder", async (event, { folderPath }) => {
+  try {
+    if (folderWatcher) { folderWatcher.close(); folderWatcher = null; }
+    if (!folderPath) return { success: true, message: "Watcher stopped" };
+    if (!fs.existsSync(folderPath)) fs.mkdirSync(folderPath, { recursive: true });
+    watchedFolder = folderPath;
+    folderWatcher = fs.watch(folderPath, (eventType, filename) => {
+      if (eventType === "rename" && filename && /\.xlsx$/i.test(filename)) {
+        const filePath = path.join(folderPath, filename);
+        // Small delay to let the file finish writing
+        setTimeout(() => {
+          if (fs.existsSync(filePath)) {
+            try {
+              const buf = fs.readFileSync(filePath);
+              const b64 = buf.toString("base64");
+              if (mainWindow) {
+                mainWindow.webContents.send("gc-file-detected", { filename, base64: b64 });
+              }
+            } catch (err) { console.error("[watch] Error reading", filename, err.message); }
+          }
+        }, 1500);
+      }
+    });
+    // Also scan existing files on start
+    const existing = fs.readdirSync(folderPath).filter(f => /\.xlsx$/i.test(f));
+    for (const filename of existing) {
+      try {
+        const buf = fs.readFileSync(path.join(folderPath, filename));
+        const b64 = buf.toString("base64");
+        if (mainWindow) {
+          mainWindow.webContents.send("gc-file-detected", { filename, base64: b64 });
+        }
+      } catch (err) { console.error("[watch] Error reading existing", filename, err.message); }
+    }
+    return { success: true, message: `Watching ${folderPath} (${existing.length} existing files)` };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
+// Browse for folder
+ipcMain.handle("browse-folder", async () => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    properties: ["openDirectory"],
+    title: "Select GlobalConnect Import Folder",
+  });
+  return result.canceled ? null : result.filePaths[0];
+});
+
+// ─── Auto-Import: Outlook Attachment Extractor ───────────────────
+ipcMain.handle("extract-outlook-attachments", async (event, { senderFilter, subjectFilter, targetFolder, daysBack }) => {
+  if (process.platform !== "win32") {
+    return { success: false, error: "Outlook extraction only available on Windows" };
+  }
+  try {
+    if (!fs.existsSync(targetFolder)) fs.mkdirSync(targetFolder, { recursive: true });
+    const psScript = `
+$ol = New-Object -ComObject Outlook.Application
+$ns = $ol.GetNameSpace("MAPI")
+$inbox = $ns.GetDefaultFolder(6) # olFolderInbox
+$cutoff = (Get-Date).AddDays(-${daysBack || 1})
+$count = 0
+foreach ($item in $inbox.Items) {
+  if ($item.ReceivedTime -lt $cutoff) { continue }
+  $match = $true
+  ${senderFilter ? `if ($item.SenderEmailAddress -notlike '*${senderFilter.replace(/'/g, "''")}*') { $match = $false }` : ""}
+  ${subjectFilter ? `if ($item.Subject -notlike '*${subjectFilter.replace(/'/g, "''")}*') { $match = $false }` : ""}
+  if ($match -and $item.Attachments.Count -gt 0) {
+    foreach ($att in $item.Attachments) {
+      if ($att.FileName -like "*.xlsx") {
+        $savePath = Join-Path '${targetFolder.replace(/'/g, "''")}' $att.FileName
+        $att.SaveAsFile($savePath)
+        $count++
+      }
+    }
+  }
+}
+Write-Output "$count"
+`;
+    const tmpPs = path.join(app.getPath("temp"), "outlook_extract.ps1");
+    fs.writeFileSync(tmpPs, psScript, "utf-8");
+    const { execSync } = require("child_process");
+    const result = execSync(`powershell -ExecutionPolicy Bypass -File "${tmpPs}"`, { timeout: 30000 }).toString().trim();
+    fs.unlinkSync(tmpPs);
+    return { success: true, count: parseInt(result) || 0 };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});

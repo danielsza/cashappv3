@@ -40,6 +40,7 @@ const DEFAULTS = {
   knownDealers: KNOWN_DEALERS_DEFAULT,
   users: ["Daniel"], defaultUser: "Daniel",
   highlightColor: "#c2f4fc", customPdfTemplate: "",
+  gcImportFolder: "", gcOutlookSender: "", gcOutlookSubject: "",
 };
 
 // ─── Barcode Helpers ─────────────────────────────────────────────
@@ -107,6 +108,204 @@ function parseFilename(name) {
   if (!clean.startsWith(prefix)) { const p = clean.split("_").filter(Boolean); return { pbsPO: p[0] || "Unknown", gmControl: p[1] || "", dateStr: "" }; }
   const seg = clean.substring(prefix.length).split("_");
   return { pbsPO: seg[0] || "", gmControl: seg[1] || "", dateStr: seg.slice(2).join("-") || "" };
+}
+
+// ─── GlobalConnect File Format Detection & Parsers ───────────────
+
+// Status code → display name mapping for Answerback file
+const ANSWERBACK_STATUS = {
+  101: "Shipped", 105: "Order Received", 107: "Superseded", 136: "Ship Direct",
+  202: "Controlled Part", 402: "Ship Direct", 410: "Referred", 501: "Backordered",
+  503: "Cancelled", 504: "Cancelled", 505: "Cancelled",
+};
+
+function isShippedStatus(status) {
+  return status === "Shipped" || status === "Ship Direct";
+}
+
+// Detect file format from parsed XLSX rows + sheet name
+function detectFileFormat(rows, sheetName) {
+  if (!rows.length) return "unknown";
+  const keys = Object.keys(rows[0]).map(k => k.toLowerCase());
+  if (sheetName && sheetName.startsWith("Answerback")) return "answerback";
+  if (sheetName && sheetName.startsWith("Shipment")) return "shipment";
+  if (keys.some(k => k.includes("answerback date")) && keys.some(k => k.includes("status code"))) return "answerback";
+  if (keys.some(k => k.includes("shipment number")) && keys.some(k => k.includes("part number shipped"))) return "shipment";
+  if (keys.some(k => k.includes("current status")) && keys.some(k => k.includes("part no. ordered"))) return "pwb";
+  return "unknown";
+}
+
+// Parse GlobalConnect Answerback file → same format as normPWB
+function parseAnswerbacks(rows) {
+  // Group by PO Control Number → each becomes a "PO"
+  const byControl = {};
+  for (const row of rows) {
+    const ctrl = String(row["PO Control Number"] || "").trim();
+    if (!ctrl) continue;
+    if (!byControl[ctrl]) byControl[ctrl] = { ctrl, order: "", facility: "", lines: [] };
+    const order = String(row["Order Number"] || "").trim();
+    if (order && !byControl[ctrl].order) byControl[ctrl].order = order;
+    const fac = String(row["Facility"] || "").trim();
+    const code = parseInt(row["Status Code"]) || 0;
+    const status = ANSWERBACK_STATUS[code] || row["Status Message"] || `Code ${code}`;
+    const partOrdered = String(row["Part Number Ordered"] || "").replace(/\s/g, "");
+    const partWritten = String(row["Part Number Written"] || "").replace(/\s/g, "");
+    const qtyOrdered = parseInt(row["Qty Ordered"]) || 0;
+    const qtyProc = parseInt(row["Qty Processed"]) || 0;
+    const lineItem = parseInt(row["Line Item Number"]) || 0;
+
+    // Deduplicate: answerback can have multiple status codes per line (e.g. 105+501)
+    // Keep the most actionable status (shipped > backordered > received > other)
+    const priority = { "Shipped": 1, "Backordered": 2, "Cancelled": 3, "Superseded": 4,
+      "Ship Direct": 5, "Referred": 6, "Controlled Part": 7, "Order Received": 8 };
+    const existing = byControl[ctrl].lines.find(l => l.partOrdered === partOrdered && l.lineItem === lineItem);
+    if (existing) {
+      const oldP = priority[existing.status] || 99;
+      const newP = priority[status] || 99;
+      if (newP < oldP) {
+        existing.status = status; existing.statusCode = code; existing.statusMsg = row["Status Message"] || "";
+        existing.qtyProc = qtyProc;
+      }
+      continue;
+    }
+
+    byControl[ctrl].lines.push({
+      status, statusCode: code, statusMsg: row["Status Message"] || "",
+      partOrdered, partProcessed: partWritten,
+      facility: fac, qtyOrdered, qtyProc, lineItem,
+      shipmentNo: "", // Answerbacks don't have shipment numbers
+      superseded: partOrdered !== partWritten && partWritten !== "" && partOrdered !== "",
+    });
+  }
+  return byControl;
+}
+
+// Parse GlobalConnect Shipment file → aggregated by part within shipment
+function parseShipments(rows) {
+  // Group by Control Number (PO) → then by (Shipment Number, Part Number)
+  const byControl = {};
+  for (const row of rows) {
+    const ctrl = String(row["Control Number"] || "").trim();
+    if (!ctrl) continue;
+    if (!byControl[ctrl]) byControl[ctrl] = { ctrl, order: "", shipments: {}, enrichment: {} };
+    const shipNo = String(row["Shipment Number"] || "").trim();
+    const order = String(row["Order Number"] || "").trim();
+    if (order && !byControl[ctrl].order) byControl[ctrl].order = order;
+    const partShipped = String(row["Part Number Shipped"] || "").replace(/\s/g, "");
+    const partOrdered = String(row["Part Number Ordered"] || "").replace(/\s/g, "");
+    const shipQty = parseFloat(row["Part Pieces Shipped"]) || 0;
+    const ordQty = parseFloat(row["Part Pieces Ordered"]) || 0;
+    const facility = String(row["Facility"] || "").trim();
+    const bin = String(row["Bin Location"] || "").trim();
+    const carrier = String(row["Carrier"] || "").trim();
+    const partName = String(row["Part Name"] || "").trim();
+    const tracking = String(row["Tracking Number(s)"] || "").trim();
+    const itemNo = parseInt(row["Order Item Number"]) || 0;
+
+    const key = `${shipNo}|${partShipped}|${itemNo}`;
+    if (!byControl[ctrl].shipments[key]) {
+      byControl[ctrl].shipments[key] = {
+        shipmentNo: shipNo, partShipped, partOrdered, qtyShipped: 0, qtyOrdered: ordQty,
+        facility, bin, carrier, partName, tracking, itemNo, pieceCount: 0,
+      };
+    }
+    byControl[ctrl].shipments[key].qtyShipped += shipQty;
+    byControl[ctrl].shipments[key].pieceCount += 1;
+
+    // Store enrichment data keyed by part number for merging with answerbacks
+    if (!byControl[ctrl].enrichment[partShipped]) {
+      byControl[ctrl].enrichment[partShipped] = { bin, carrier, partName, tracking, shipmentNo: shipNo };
+    }
+  }
+  return byControl;
+}
+
+// Merge answerbacks + shipments into unified PO list
+function mergeGlobalConnect(answerbacks, shipments) {
+  const allCtrls = new Set([...Object.keys(answerbacks || {}), ...Object.keys(shipments || {})]);
+  const poList = [];
+
+  for (const ctrl of allCtrls) {
+    const ab = answerbacks?.[ctrl];
+    const sh = shipments?.[ctrl];
+    const lines = [];
+
+    if (ab) {
+      // Start with answerback data (has all statuses)
+      for (const line of ab.lines) {
+        const enrich = sh?.enrichment?.[line.partProcessed || line.partOrdered] || {};
+        // Try to find matching shipment for shipped lines
+        let shipNo = line.shipmentNo;
+        if (line.status === "Shipped" && !shipNo && sh) {
+          const match = Object.values(sh.shipments).find(s =>
+            s.partShipped === (line.partProcessed || line.partOrdered));
+          if (match) shipNo = match.shipmentNo;
+        }
+        lines.push({
+          ...line, shipmentNo: shipNo || enrich.shipmentNo || "",
+          bin: enrich.bin || "", carrier: enrich.carrier || "",
+          partName: enrich.partName || "", tracking: enrich.tracking || "",
+        });
+      }
+    }
+
+    if (sh) {
+      // Add shipped items from shipment file that aren't in answerbacks
+      for (const s of Object.values(sh.shipments)) {
+        const alreadyHave = lines.find(l =>
+          (l.partProcessed === s.partShipped || l.partOrdered === s.partShipped) &&
+          (l.status === "Shipped" || l.status === "Ship Direct"));
+        if (!alreadyHave) {
+          lines.push({
+            status: "Shipped", statusCode: 101, statusMsg: "SHIPPED",
+            partOrdered: s.partOrdered, partProcessed: s.partShipped,
+            facility: s.facility, qtyOrdered: s.qtyOrdered, qtyProc: s.qtyShipped,
+            shipmentNo: s.shipmentNo, lineItem: s.itemNo,
+            superseded: s.partOrdered !== s.partShipped && s.partOrdered !== "" && s.partShipped !== "",
+            bin: s.bin, carrier: s.carrier, partName: s.partName, tracking: s.tracking,
+          });
+        }
+      }
+    }
+
+    poList.push({
+      id: Date.now() + Math.random(),
+      pbsPO: ab?.order || sh?.order || ctrl,
+      gmControl: ctrl,
+      dateStr: "",
+      filename: "GlobalConnect",
+      source: "gc",
+      data: lines,
+    });
+  }
+  return poList;
+}
+
+// Parse XLSX with sheet name detection (ExcelJS gives us sheet names)
+async function parseXLSXWithSheets(file) {
+  const buf = await file.arrayBuffer();
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.load(buf);
+  const results = [];
+  for (const ws of wb.worksheets) {
+    const headers = [];
+    ws.getRow(1).eachCell((cell, col) => { headers[col] = String(cell.value || "").trim(); });
+    const rows = [];
+    for (let r = 2; r <= ws.rowCount; r++) {
+      const row = ws.getRow(r);
+      const obj = {};
+      let hasData = false;
+      headers.forEach((h, col) => {
+        if (!h) return;
+        const v = row.getCell(col).value;
+        obj[h] = v != null ? (typeof v === "object" && v.result !== undefined ? v.result : v) : "";
+        if (v != null && v !== "") hasData = true;
+      });
+      if (hasData) rows.push(obj);
+    }
+    results.push({ sheetName: ws.name, rows });
+  }
+  return results;
 }
 
 // ─── GM Logo (base64 PNG) ────────────────────────────────────────
@@ -232,8 +431,9 @@ async function generatePinkSheet(purchaseOrders, activePO, scannedItems = []) {
 
   for (const po of pos) {
     const allRows = po.data;
-    const shipNums = [...new Set(allRows.filter(r => r.status === "Shipped" && r.shipmentNo).map(r => r.shipmentNo))].sort();
-    if (!shipNums.length) { shipNums.push("none"); }
+    const shipNums = [...new Set(allRows.filter(r => isShippedStatus(r.status) && r.shipmentNo).map(r => r.shipmentNo))].sort();
+    const noShipNum = allRows.some(r => isShippedStatus(r.status) && !r.shipmentNo);
+    if (!shipNums.length || noShipNum) { shipNums.push("none"); }
 
     for (const shipNo of shipNums) {
       const sheetName = `${po.pbsPO}_${shipNo}`.substring(0, 31);
@@ -252,7 +452,7 @@ async function generatePinkSheet(purchaseOrders, activePO, scannedItems = []) {
 
       // Blank row 3, 4
       // Header row 5
-      const headers = ["Current Status", "Line Item No.", "Part No. Ordered", "Part No. Processed", "Facility", "Qty Ordered", "Qty Proc.", "Shipment No.", "Notes"];
+      const headers = ["Current Status", "Line Item No.", "Part No. Ordered", "Part No. Processed", "Facility", "Qty Ordered", "Qty Proc.", "Shipment No.", "Bin", "Notes"];
       const hRow = ws.getRow(5);
       headers.forEach((h, i) => {
         const cell = hRow.getCell(i + 1);
@@ -261,8 +461,8 @@ async function generatePinkSheet(purchaseOrders, activePO, scannedItems = []) {
       });
 
       // Separate non-shipped vs shipped for this shipping order
-      const nonShipped = allRows.filter(r => r.status !== "Shipped").sort((a, b) => a.partOrdered.localeCompare(b.partOrdered));
-      const shipped = allRows.filter(r => r.status === "Shipped" && r.shipmentNo === shipNo).sort((a, b) => a.partProcessed.localeCompare(b.partProcessed));
+      const nonShipped = allRows.filter(r => !isShippedStatus(r.status)).sort((a, b) => a.partOrdered.localeCompare(b.partOrdered));
+      const shipped = allRows.filter(r => isShippedStatus(r.status) && (shipNo === "none" ? !r.shipmentNo : r.shipmentNo === shipNo)).sort((a, b) => (a.bin || "").localeCompare(b.bin || "") || a.partProcessed.localeCompare(b.partProcessed));
 
       // Skip if nothing
       let row = 6;
@@ -278,8 +478,9 @@ async function generatePinkSheet(purchaseOrders, activePO, scannedItems = []) {
         dr.getCell(6).value = r.qtyOrdered;
         dr.getCell(7).value = r.qtyProc;
         dr.getCell(8).value = r.shipmentNo || "";
-        dr.getCell(9).value = "";
-        for (let c = 1; c <= 9; c++) dr.getCell(c).font = normalFont;
+        dr.getCell(9).value = r.bin || "";
+        dr.getCell(10).value = "";
+        for (let c = 1; c <= 10; c++) dr.getCell(c).font = normalFont;
         // Supersession highlight
         if (r.partOrdered && r.partProcessed && r.partOrdered !== r.partProcessed) {
           dr.getCell(4).fill = pinkFill;
@@ -291,7 +492,7 @@ async function generatePinkSheet(purchaseOrders, activePO, scannedItems = []) {
       // Thick separator line
       if (nonShipped.length > 0 && shipped.length > 0) {
         const sepRow = row - 1;
-        for (let c = 1; c <= 9; c++) {
+        for (let c = 1; c <= 10; c++) {
           ws.getRow(sepRow).getCell(c).border = {
             ...ws.getRow(sepRow).getCell(c).border,
             bottom: { style: "thick" }
@@ -315,8 +516,9 @@ async function generatePinkSheet(purchaseOrders, activePO, scannedItems = []) {
         dr.getCell(6).value = r.qtyOrdered;
         dr.getCell(7).value = r.qtyProc;
         dr.getCell(8).value = r.shipmentNo || "";
-        dr.getCell(9).value = "";
-        for (let c = 1; c <= 9; c++) dr.getCell(c).font = normalFont;
+        dr.getCell(9).value = r.bin || "";
+        dr.getCell(10).value = "";
+        for (let c = 1; c <= 10; c++) dr.getCell(c).font = normalFont;
         const notes = [];
         // Supersession highlight (Part Ordered ≠ Part Processed)
         if (r.partOrdered && r.partProcessed && r.partOrdered !== r.partProcessed) {
@@ -352,14 +554,14 @@ async function generatePinkSheet(purchaseOrders, activePO, scannedItems = []) {
             notes.push(`Scanned: ${scan.quantity} (expected ${r.qtyProc})`);
           }
         }
-        if (notes.length) dr.getCell(9).value = notes.join(" | ");
+        if (notes.length) dr.getCell(10).value = notes.join(" | ");
         row++;
       }
 
       // Auto-fit columns
       ws.columns = [
         { width: 14 }, { width: 12 }, { width: 16 }, { width: 16 },
-        { width: 10 }, { width: 12 }, { width: 10 }, { width: 14 }, { width: 30 }
+        { width: 10 }, { width: 12 }, { width: 10 }, { width: 14 }, { width: 8 }, { width: 30 }
       ];
     }
   }
@@ -577,14 +779,146 @@ export default function App() {
   const stats = { total: scannedItems.reduce((s, i) => s + i.quantity, 0), unique: scannedItems.length, wd: getWD().length, dipp: getDipp().length, so: [...new Set(scannedItems.map(i => i.shippingOrder))].length };
 
   // ─── PWB+ / Comparison ────────────────────────────────────
-  const handleFileUpload = async (e) => { for (const file of Array.from(e.target.files)) { try { const raw = await parseXLSXFile(file), info = parseFilename(file.name), norm = normPWB(raw); const po = { id: Date.now() + Math.random(), ...info, filename: file.name, data: norm }; setPurchaseOrders(prev => { const ex = prev.find(p => p.pbsPO === po.pbsPO && p.gmControl === po.gmControl); return ex ? prev.map(p => p.pbsPO === po.pbsPO && p.gmControl === po.gmControl ? po : p) : [...prev, po]; }); if (!activePO) setActivePO(info.pbsPO); showFB(`✓ PO ${info.pbsPO} — ${norm.length} lines`, t.green); } catch (err) { showFB(`Error: ${err.message}`, t.red); } } if (fileInputRef.current) fileInputRef.current.value = ""; };
+  // ─── GlobalConnect state ───
+  const [gcAnswerbacks, setGcAnswerbacks] = useState(null);
+  const [gcShipments, setGcShipments] = useState(null);
+  const [gcEnrichment, setGcEnrichment] = useState({}); // partNumber → { bin, carrier, partName, tracking }
+
+  // Merge GC data whenever answerbacks or shipments change
+  useEffect(() => {
+    if (!gcAnswerbacks && !gcShipments) return;
+    const merged = mergeGlobalConnect(gcAnswerbacks, gcShipments);
+    if (!merged.length) return;
+    setPurchaseOrders(prev => {
+      // Remove old GC entries, add new
+      const nonGC = prev.filter(p => p.source !== "gc");
+      return [...nonGC, ...merged];
+    });
+    // Build enrichment lookup
+    if (gcShipments) {
+      const enr = {};
+      for (const ctrl of Object.values(gcShipments)) {
+        for (const [, data] of Object.entries(ctrl.enrichment)) {
+          enr[data.shipmentNo + "|" + Object.keys(ctrl.enrichment).find(k => ctrl.enrichment[k] === data)] = data;
+        }
+        for (const s of Object.values(ctrl.shipments)) {
+          enr[s.partShipped] = { bin: s.bin, carrier: s.carrier, partName: s.partName, tracking: s.tracking, shipmentNo: s.shipmentNo };
+        }
+      }
+      setGcEnrichment(enr);
+    }
+    if (!activePO && merged.length) setActivePO(merged[0].pbsPO);
+  }, [gcAnswerbacks, gcShipments]);
+
+  // ─── Auto-import: process base64 XLSX (from Electron folder watcher) ───
+  const processGcBase64 = useCallback(async (base64, filename) => {
+    try {
+      const binary = atob(base64);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+      const blob = new Blob([bytes], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+      const file = new File([blob], filename, { type: blob.type });
+      const sheets = await parseXLSXWithSheets(file);
+      for (const { sheetName, rows } of sheets) {
+        const fmt = detectFileFormat(rows, sheetName);
+        if (fmt === "answerback") {
+          const parsed = parseAnswerbacks(rows);
+          setGcAnswerbacks(prev => ({ ...(prev || {}), ...parsed }));
+          const nLines = Object.values(parsed).reduce((s, p) => s + p.lines.length, 0);
+          showFB(`📥 Auto-imported answerbacks: ${nLines} lines (${filename})`, t.green);
+        } else if (fmt === "shipment") {
+          const parsed = parseShipments(rows);
+          setGcShipments(prev => ({ ...(prev || {}), ...parsed }));
+          showFB(`📥 Auto-imported shipments (${filename})`, t.green);
+        }
+      }
+    } catch (err) { showFB(`Auto-import error: ${err.message}`, t.red); }
+  }, [t]);
+
+  // ─── Auto-import: Electron folder watcher ───
+  useEffect(() => {
+    if (!window.electronAPI?.isElectron) return;
+    // Listen for files detected by folder watcher
+    window.electronAPI.onGcFileDetected(({ filename, base64 }) => {
+      processGcBase64(base64, filename);
+    });
+    // Start watching if folder is configured
+    if (settings.gcImportFolder) {
+      window.electronAPI.watchFolder({ folderPath: settings.gcImportFolder }).then(res => {
+        if (res.success) console.log("[auto-import]", res.message);
+        else console.error("[auto-import]", res.error);
+      });
+    }
+  }, [settings.gcImportFolder, processGcBase64]);
+
+  const handleFileUpload = async (e) => {
+    for (const file of Array.from(e.target.files)) {
+      try {
+        const sheets = await parseXLSXWithSheets(file);
+        let handled = false;
+
+        for (const { sheetName, rows } of sheets) {
+          const fmt = detectFileFormat(rows, sheetName);
+
+          if (fmt === "answerback") {
+            const parsed = parseAnswerbacks(rows);
+            setGcAnswerbacks(prev => {
+              const merged = { ...(prev || {}) };
+              for (const [ctrl, data] of Object.entries(parsed)) {
+                merged[ctrl] = data;
+              }
+              return merged;
+            });
+            const nCtrls = Object.keys(parsed).length;
+            const nLines = Object.values(parsed).reduce((s, p) => s + p.lines.length, 0);
+            showFB(`✓ Answerbacks: ${nLines} lines across ${nCtrls} POs`, t.green);
+            handled = true;
+          }
+
+          else if (fmt === "shipment") {
+            const parsed = parseShipments(rows);
+            setGcShipments(prev => {
+              const merged = { ...(prev || {}) };
+              for (const [ctrl, data] of Object.entries(parsed)) {
+                merged[ctrl] = data;
+              }
+              return merged;
+            });
+            const nCtrls = Object.keys(parsed).length;
+            const nShips = new Set();
+            Object.values(parsed).forEach(p => Object.values(p.shipments).forEach(s => nShips.add(s.shipmentNo)));
+            showFB(`✓ Shipments: ${nShips.size} shipments across ${nCtrls} POs`, t.green);
+            handled = true;
+          }
+
+          else if (fmt === "pwb" || !handled) {
+            // Fall back to original PWB+ format
+            const info = parseFilename(file.name);
+            const norm = normPWB(rows);
+            if (!norm.length) continue;
+            const po = { id: Date.now() + Math.random(), ...info, filename: file.name, source: "pwb", data: norm };
+            setPurchaseOrders(prev => {
+              const ex = prev.find(p => p.pbsPO === po.pbsPO && p.gmControl === po.gmControl);
+              return ex ? prev.map(p => p.pbsPO === po.pbsPO && p.gmControl === po.gmControl ? po : p) : [...prev, po];
+            });
+            if (!activePO) setActivePO(info.pbsPO);
+            showFB(`✓ PO ${info.pbsPO} — ${norm.length} lines`, t.green);
+            handled = true;
+          }
+        }
+
+        if (!handled) showFB(`⚠ Could not detect format for ${file.name}`, t.yellow);
+      } catch (err) { showFB(`Error: ${err.message}`, t.red); }
+    }
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  };
   const handleCSVPaste = () => { const raw = parseCSVText(csvText); if (!raw.length) { showFB("No data", t.red); return; } const norm = normPWB(raw), name = csvPO.trim() || `paste-${Date.now()}`; setPurchaseOrders(prev => [...prev, { id: Date.now(), pbsPO: name, gmControl: "", dateStr: "", filename: "pasted", data: norm }]); if (!activePO) setActivePO(name); setCsvText(""); setCsvPO(""); showFB(`✓ ${norm.length} lines`, t.green); };
   const normPWB = (data) => data.map(row => ({ status: row["Current Status"] || "", partOrdered: String(row["Part No. Ordered"] || "").replace(/\s/g, ""), partProcessed: String(row["Part No. Processed"] || "").replace(/\s/g, ""), facility: row["Facility"] || "", qtyOrdered: parseInt(row["Qty Ordered"] || 0), qtyProc: parseInt(row["Qty Proc."] || 0), shipmentNo: String(row["Shipment No."] || "").replace(/\s/g, ""), superseded: String(row["Part No. Ordered"] || "").replace(/\s/g, "") !== String(row["Part No. Processed"] || "").replace(/\s/g, "") }));
   const removePO = (id) => { setPurchaseOrders(prev => { const po = prev.find(p => p.id === id), next = prev.filter(p => p.id !== id); if (po && activePO === po.pbsPO) setActivePO(next.length ? next[0].pbsPO : null); return next; }); };
   const getPWB = () => { if (activePO === "__all__") return purchaseOrders.flatMap(p => p.data); return (purchaseOrders.find(p => p.pbsPO === activePO) || {}).data || []; };
   const getShipNums = () => { const n = new Set(); getPWB().forEach(r => { if (r.shipmentNo) n.add(r.shipmentNo); }); scannedItems.forEach(r => { if (r.shippingOrder) n.add(r.shippingOrder); }); return [...n].sort(); };
   const getComp = () => {
-    const shipped = getPWB().filter(r => r.status === "Shipped" && (selectedShipment === "all" || r.shipmentNo === selectedShipment)); const results = [], matched = new Set();
+    const shipped = getPWB().filter(r => isShippedStatus(r.status) && (selectedShipment === "all" || r.shipmentNo === selectedShipment)); const results = [], matched = new Set();
     shipped.forEach(pwb => { const part = pwb.partProcessed || pwb.partOrdered; const scan = scannedItems.find(s => s.partNumber === part && (selectedShipment === "all" || s.shippingOrder === pwb.shipmentNo)); if (scan) { matched.add(scan.id); const diff = scan.quantity - pwb.qtyProc; results.push({ partNumber: part, partOrdered: pwb.partOrdered, superseded: pwb.superseded, expectedQty: pwb.qtyProc, scannedQty: scan.quantity, qtyDiff: diff, shippingOrder: pwb.shipmentNo, facility: pwb.facility, status: diff === 0 ? "match" : diff > 0 ? "overage" : "short", wrongDealer: scan.wrongDealer, dealerCode: scan.dealerCode, dipp: scan.dipp }); } else results.push({ partNumber: part, partOrdered: pwb.partOrdered, superseded: pwb.superseded, expectedQty: pwb.qtyProc, scannedQty: 0, qtyDiff: -pwb.qtyProc, shippingOrder: pwb.shipmentNo, facility: pwb.facility, status: "short", wrongDealer: false }); });
     scannedItems.forEach(scan => { if (!matched.has(scan.id) && (selectedShipment === "all" || scan.shippingOrder === selectedShipment)) results.push({ partNumber: scan.partNumber, partOrdered: scan.partNumber, superseded: false, expectedQty: 0, scannedQty: scan.quantity, qtyDiff: scan.quantity, shippingOrder: scan.shippingOrder, facility: scan.pdc, status: "overage", wrongDealer: scan.wrongDealer, dealerCode: scan.dealerCode, dipp: scan.dipp }); });
     return results.sort((a, b) => ({ short: 0, overage: 1, match: 2 }[a.status] ?? 3) - ({ short: 0, overage: 1, match: 2 }[b.status] ?? 3) || a.partNumber.localeCompare(b.partNumber));
@@ -650,17 +984,18 @@ td{padding:3px 6px;font-size:9pt}
 </style></head><body>`;
       for (const po of pos) {
         const allRows = po.data;
-        const shipNums = [...new Set(allRows.filter(r => r.status === "Shipped" && r.shipmentNo).map(r => r.shipmentNo))].sort();
-        if (!shipNums.length) shipNums.push("none");
+        const shipNums = [...new Set(allRows.filter(r => isShippedStatus(r.status) && r.shipmentNo).map(r => r.shipmentNo))].sort();
+        const noShipNum = allRows.some(r => isShippedStatus(r.status) && !r.shipmentNo);
+        if (!shipNums.length || noShipNum) shipNums.push("none");
         for (const shipNo of shipNums) {
           html += `<div class="sheet"><h1>${po.pbsPO}</h1><h2>${shipNo !== "none" ? shipNo : ""}</h2>`;
-          html += `<table><thead><tr><th>Status</th><th>Line#</th><th>Part Ordered</th><th>Part Processed</th><th>Facility</th><th>Qty Ord</th><th>Qty Proc</th><th>Ship#</th><th>Notes</th></tr></thead><tbody>`;
-          const nonShipped = allRows.filter(r => r.status !== "Shipped").sort((a, b) => a.partOrdered.localeCompare(b.partOrdered));
-          const shipped = allRows.filter(r => r.status === "Shipped" && r.shipmentNo === shipNo).sort((a, b) => a.partProcessed.localeCompare(b.partProcessed));
+          html += `<table><thead><tr><th>Status</th><th>Line#</th><th>Part Ordered</th><th>Part Processed</th><th>Facility</th><th>Qty Ord</th><th>Qty Proc</th><th>Ship#</th><th>Bin</th><th>Notes</th></tr></thead><tbody>`;
+          const nonShipped = allRows.filter(r => !isShippedStatus(r.status)).sort((a, b) => a.partOrdered.localeCompare(b.partOrdered));
+          const shipped = allRows.filter(r => isShippedStatus(r.status) && (shipNo === "none" ? !r.shipmentNo : r.shipmentNo === shipNo)).sort((a, b) => (a.bin || "").localeCompare(b.bin || "") || a.partProcessed.localeCompare(b.partProcessed));
           for (const r of nonShipped) {
             const isSup = r.partOrdered && r.partProcessed && r.partOrdered !== r.partProcessed;
             const isLast = r === nonShipped[nonShipped.length - 1] && shipped.length > 0;
-            html += `<tr${isLast ? ' class="sep"' : ""}><td>${r.status}</td><td></td><td>${r.partOrdered}</td><td${isSup ? ' class="hl"' : ""}>${r.partProcessed}</td><td>${r.facility}</td><td>${r.qtyOrdered}</td><td>${r.qtyProc}</td><td>${r.shipmentNo || ""}</td><td></td></tr>`;
+            html += `<tr${isLast ? ' class="sep"' : ""}><td>${r.status}</td><td></td><td>${r.partOrdered}</td><td${isSup ? ' class="hl"' : ""}>${r.partProcessed}</td><td>${r.facility}</td><td>${r.qtyOrdered}</td><td>${r.qtyProc}</td><td>${r.shipmentNo || ""}</td><td></td><td></td></tr>`;
           }
           for (const r of shipped) {
             const isSup = r.partOrdered && r.partProcessed && r.partOrdered !== r.partProcessed;
@@ -687,7 +1022,7 @@ td{padding:3px 6px;font-size:9pt}
               // Scanned but doesn't match — no circle
               notes.push(`Scanned: ${scan.quantity} (exp ${r.qtyProc})`);
             }
-            html += `<tr><td>${r.status}</td><td></td><td>${r.partOrdered}</td><td${isSup ? ' class="hl"' : ""}>${r.partProcessed}</td><td>${r.facility}</td><td>${r.qtyOrdered}</td><td${tdExtra}>${qtyHtml}</td><td>${r.shipmentNo || ""}</td><td class="notes">${notes.join(" | ")}</td></tr>`;
+            html += `<tr><td>${r.status}</td><td></td><td>${r.partOrdered}</td><td${isSup ? ' class="hl"' : ""}>${r.partProcessed}</td><td>${r.facility}</td><td>${r.qtyOrdered}</td><td${tdExtra}>${qtyHtml}</td><td>${r.shipmentNo || ""}</td><td>${r.bin || gcEnrichment[r.partProcessed || r.partOrdered]?.bin || ""}</td><td class="notes">${notes.join(" | ")}</td></tr>`;
           }
           html += `</tbody></table></div>`;
         }
@@ -737,7 +1072,7 @@ td{padding:3px 6px;font-size:9pt}
     <div style={S.overlay} onClick={() => setShowSettings(false)}>
       <div style={S.modal} onClick={e => e.stopPropagation()}>
         <div style={{ padding: "14px 16px", borderBottom: `1px solid ${t.border}`, display: "flex", justifyContent: "space-between", position: "sticky", top: 0, background: t.bg2, zIndex: 1 }}><span style={{ fontWeight: 700, fontSize: 14, color: t.textStrong }}>Settings</span><button style={S.sm(t.bg3, t.textMuted)} onClick={() => setShowSettings(false)}>✕</button></div>
-        <div style={{ display: "flex", borderBottom: `1px solid ${t.border}` }}><button style={S.stab(settingsTab === "general")} onClick={() => setSettingsTab("general")}>General</button><button style={S.stab(settingsTab === "dealers")} onClick={() => setSettingsTab("dealers")}>Dealers</button></div>
+        <div style={{ display: "flex", borderBottom: `1px solid ${t.border}` }}><button style={S.stab(settingsTab === "general")} onClick={() => setSettingsTab("general")}>General</button><button style={S.stab(settingsTab === "import")} onClick={() => setSettingsTab("import")}>Import</button><button style={S.stab(settingsTab === "dealers")} onClick={() => setSettingsTab("dealers")}>Dealers</button></div>
         <div style={{ padding: 16 }}>
           {settingsTab === "general" && (<>
             <div style={{ marginBottom: 14 }}><label style={S.lbl}>Dealer Code</label><input style={S.mI} value={settingsDraft.dealerCode} onChange={e => setSettingsDraft(p => ({ ...p, dealerCode: e.target.value }))} /></div>
@@ -755,6 +1090,28 @@ td{padding:3px 6px;font-size:9pt}
                 <button style={S.sm(t.bg3, t.accent)} onClick={() => setSettingsDraft(p => ({ ...p, defaultUser: u }))}>★</button>
                 <button style={S.sm(t.bg3, t.textFaint)} onClick={() => setSettingsDraft(p => ({ ...p, users: (p.users || []).filter(x => x !== u), defaultUser: p.defaultUser === u ? ((p.users || []).filter(x => x !== u)[0] || "") : p.defaultUser }))}>✕</button>
               </div>)}
+            </div>
+          </>)}
+          {settingsTab === "import" && (<>
+            <div style={{ marginBottom: 12, fontSize: 11, color: t.textMuted }}>GlobalConnect data import — Answerback and Shipment XLSX files. Upload manually or set up auto-import.</div>
+            <div style={{ marginBottom: 14 }}><label style={S.lbl}>Auto-Import Folder {!window.electronAPI?.isElectron && <span style={{ fontSize: 9, color: t.textFaint }}>(Desktop app only)</span>}</label>
+              <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 4 }}>
+                <input style={{ ...S.mI, flex: 1, marginBottom: 0, fontFamily: "monospace", fontSize: 11 }} placeholder="C:\GlobalConnect\Import" value={settingsDraft.gcImportFolder || ""} onChange={e => setSettingsDraft(p => ({ ...p, gcImportFolder: e.target.value }))} />
+                {window.electronAPI?.isElectron && <button style={S.btn(t.bg3, t.text)} onClick={async () => { const folder = await window.electronAPI.browseFolder(); if (folder) setSettingsDraft(p => ({ ...p, gcImportFolder: folder })); }}>📂 Browse</button>}
+              </div>
+              <div style={{ fontSize: 10, color: t.textMuted, marginTop: 4 }}>Drop .xlsx files here and they auto-load into the app. Works with Outlook rules that save attachments to a folder.</div>
+            </div>
+            <div style={{ marginBottom: 14 }}><label style={S.lbl}>Outlook Auto-Extract {!window.electronAPI?.isElectron && <span style={{ fontSize: 9, color: t.textFaint }}>(Desktop app only)</span>}</label>
+              <div style={{ display: "flex", gap: 8, marginTop: 4 }}><div style={{ flex: 1 }}><input style={{ ...S.mI, marginBottom: 0, fontSize: 11 }} placeholder="Sender filter (e.g. globalconnect)" value={settingsDraft.gcOutlookSender || ""} onChange={e => setSettingsDraft(p => ({ ...p, gcOutlookSender: e.target.value }))} /><div style={{ fontSize: 9, color: t.textFaint }}>Sender email contains</div></div><div style={{ flex: 1 }}><input style={{ ...S.mI, marginBottom: 0, fontSize: 11 }} placeholder="Subject filter (e.g. shipment)" value={settingsDraft.gcOutlookSubject || ""} onChange={e => setSettingsDraft(p => ({ ...p, gcOutlookSubject: e.target.value }))} /><div style={{ fontSize: 9, color: t.textFaint }}>Subject contains</div></div></div>
+              {window.electronAPI?.isElectron && settingsDraft.gcImportFolder && <button style={{ ...S.btn(t.accent, "#fff"), marginTop: 8 }} onClick={async () => { const res = await window.electronAPI.extractOutlookAttachments({ senderFilter: settingsDraft.gcOutlookSender, subjectFilter: settingsDraft.gcOutlookSubject, targetFolder: settingsDraft.gcImportFolder, daysBack: 1 }); if (res.success) showFB(`✓ Extracted ${res.count} attachments from Outlook`, t.green); else showFB(`Outlook error: ${res.error}`, t.red); }}>📧 Extract from Outlook Now</button>}
+            </div>
+            <div style={{ background: t.bg0, border: `1px solid ${t.border}`, borderRadius: 6, padding: 12, marginTop: 8 }}>
+              <div style={{ fontSize: 11, fontWeight: 600, color: t.text, marginBottom: 6 }}>How Auto-Import Works</div>
+              <div style={{ fontSize: 10, color: t.textMuted, lineHeight: 1.6 }}>
+                <strong>Option 1: Outlook Rule</strong> — Create an Outlook rule that saves GlobalConnect email attachments to the Import Folder above. The app watches that folder and auto-loads new .xlsx files.<br/>
+                <strong>Option 2: Extract Button</strong> — Click "Extract from Outlook Now" to scan your inbox for matching emails and pull their .xlsx attachments into the import folder.<br/>
+                <strong>Option 3: Manual</strong> — Just drag and drop .xlsx files onto the PO upload area. The app auto-detects Answerback vs Shipment vs PWB+ format.
+              </div>
             </div>
           </>)}
           {settingsTab === "dealers" && (<>
@@ -881,7 +1238,8 @@ td{padding:3px 6px;font-size:9pt}
         </>)}
         {wsTab === "compare" && (<>
           <div style={S.card}><div style={S.cH}><span style={S.cL}>POs ({purchaseOrders.length})</span><label style={{ ...S.btn(t.accent, "#fff"), cursor: "pointer" }}>+ XLSX<input ref={fileInputRef} type="file" accept=".xlsx,.xls,.csv" multiple onChange={handleFileUpload} style={{ display: "none" }} /></label></div>
-            {purchaseOrders.length > 0 && <div style={{ padding: "8px 12px", display: "flex", gap: 6, flexWrap: "wrap", borderBottom: `1px solid ${t.border}` }}><button style={{ padding: "5px 10px", background: activePO === "__all__" ? t.accentBg : t.bg3, border: `1px solid ${activePO === "__all__" ? t.accent : t.border}`, borderRadius: 4, cursor: "pointer", fontSize: 11, color: activePO === "__all__" ? t.accentText : t.textMuted, fontFamily: ff }} onClick={() => setActivePO("__all__")}>All</button>{purchaseOrders.map(po => <button key={po.id} style={{ padding: "5px 10px", background: activePO === po.pbsPO ? t.accentBg : t.bg3, border: `1px solid ${activePO === po.pbsPO ? t.accent : t.border}`, borderRadius: 4, cursor: "pointer", fontSize: 11, color: activePO === po.pbsPO ? t.accentText : t.textMuted, fontFamily: ff, display: "flex", alignItems: "center", gap: 6 }} onClick={() => setActivePO(po.pbsPO)}><strong>{po.pbsPO}</strong>{po.gmControl && ` · ${po.gmControl}`}<span style={S.sm("transparent", t.textFaint)} onClick={e => { e.stopPropagation(); removePO(po.id); }}>✕</span></button>)}</div>}
+            {purchaseOrders.length > 0 && <div style={{ padding: "8px 12px", display: "flex", gap: 6, flexWrap: "wrap", borderBottom: `1px solid ${t.border}` }}><button style={{ padding: "5px 10px", background: activePO === "__all__" ? t.accentBg : t.bg3, border: `1px solid ${activePO === "__all__" ? t.accent : t.border}`, borderRadius: 4, cursor: "pointer", fontSize: 11, color: activePO === "__all__" ? t.accentText : t.textMuted, fontFamily: ff }} onClick={() => setActivePO("__all__")}>All</button>{purchaseOrders.map(po => <button key={po.id} style={{ padding: "5px 10px", background: activePO === po.pbsPO ? t.accentBg : t.bg3, border: `1px solid ${activePO === po.pbsPO ? t.accent : t.border}`, borderRadius: 4, cursor: "pointer", fontSize: 11, color: activePO === po.pbsPO ? t.accentText : t.textMuted, fontFamily: ff, display: "flex", alignItems: "center", gap: 6 }} onClick={() => setActivePO(po.pbsPO)}><strong>{po.pbsPO}</strong>{po.gmControl && ` · ${po.gmControl}`}{po.source === "gc" && <span style={{ fontSize: 8, background: "#059669", color: "#fff", borderRadius: 3, padding: "1px 4px", fontWeight: 700 }}>GC</span>}<span style={S.sm("transparent", t.textFaint)} onClick={e => { e.stopPropagation(); removePO(po.id); }}>✕</span></button>)}</div>}
+            {(gcAnswerbacks || gcShipments) && <div style={{ padding: "4px 12px", borderBottom: `1px solid ${t.border}`, fontSize: 10, color: t.textMuted, display: "flex", gap: 12 }}>{gcAnswerbacks && <span>📋 Answerbacks: {Object.keys(gcAnswerbacks).length} POs</span>}{gcShipments && <span>📦 Shipments: {Object.keys(gcShipments).length} POs</span>}</div>}
             <details style={{ borderTop: `1px solid ${t.border}` }}><summary style={{ padding: "8px 12px", cursor: "pointer", fontSize: 11, color: t.textMuted }}>Paste CSV</summary><div style={{ padding: 12 }}><input style={S.inp} value={csvPO} onChange={e => setCsvPO(e.target.value)} placeholder="PO Name" /><textarea style={{ width: "100%", padding: 10, background: t.bgInput, border: `1px solid ${t.border}`, borderRadius: 4, color: t.text, fontFamily: ff, fontSize: 12, minHeight: 80, resize: "vertical", boxSizing: "border-box", marginTop: 6 }} value={csvText} onChange={e => setCsvText(e.target.value)} placeholder="Paste..." /><button style={{ ...S.btn(t.accent, "#fff"), marginTop: 6 }} onClick={handleCSVPaste}>Load</button></div></details>
           </div>
           {purchaseOrders.length > 0 && (<><div style={{ display: "flex", gap: 8, marginBottom: 10, alignItems: "center" }}><span style={{ fontSize: 10, color: t.textMuted, fontWeight: 600 }}>SHIPMENT:</span><select style={S.sel} value={selectedShipment} onChange={e => setSelectedShipment(e.target.value)}><option value="all">All</option>{getShipNums().map(sn => <option key={sn} value={sn}>{sn}</option>)}</select><button style={{ padding: "6px 14px", background: "#e91e90", color: "#fff", border: "none", borderRadius: 6, fontFamily: ff, fontSize: 11, fontWeight: 600, cursor: "pointer", marginLeft: "auto" }} onClick={downloadPinkSheet}>🖨 Pink Sheet</button></div>
