@@ -610,28 +610,23 @@ export default function App() {
 @page{size:landscape;margin:0.5in}
 body{font-family:Arial,sans-serif;font-size:10pt;margin:0;padding:0}
 .sheet{page-break-after:always;padding:20px}.sheet:last-child{page-break-after:auto}
-h1{font-size:14pt;text-decoration:underline;margin:0;text-align:right}
-h2{font-size:14pt;text-decoration:underline;margin:0 0 10px;text-align:right}
-.sub{font-size:10pt;font-style:italic;font-weight:normal;text-decoration:none;color:#555}
+h1{font-size:14pt;text-decoration:underline;margin:0;font-weight:bold}
+h2{font-size:14pt;text-decoration:underline;margin:0 0 14px;font-weight:bold}
 table{border-collapse:collapse;width:100%}
 th{font-weight:bold;text-align:left;padding:3px 6px;font-size:9pt;border-bottom:1px solid #000}
 td{padding:3px 6px;font-size:9pt}
 .sep td{border-bottom:3px solid #000}
 .pink{background:#ff80ff;font-weight:bold}
 .notes{font-size:8pt;color:#555}
-.circ{display:inline-block;min-width:18px;text-align:center;padding:1px 6px;font-weight:bold;border-radius:50%;border:2px solid #228b22}
-.circ-match{border-color:#228b22}
-.circ-diff{border-color:#c00;background:#ff80ff}
-.circ-miss{border-color:#c00}
+.circ{display:inline-block;min-width:18px;text-align:center;padding:1px 6px;font-weight:bold;border-radius:50%;border:2px solid #000}
+.qty-diff{background:#ffff99}
 </style></head><body>`;
       for (const po of pos) {
         const allRows = po.data;
         const shipNums = [...new Set(allRows.filter(r => r.status === "Shipped" && r.shipmentNo).map(r => r.shipmentNo))].sort();
         if (!shipNums.length) shipNums.push("none");
         for (const shipNo of shipNums) {
-          const controlLabel = po.gmControl || po.pbsPO;
-          const subLabel = po.gmControl ? ` <span class="sub">(${po.pbsPO})</span>` : "";
-          html += `<div class="sheet"><h1>${controlLabel}${subLabel}</h1><h2>${shipNo !== "none" ? shipNo : ""}</h2>`;
+          html += `<div class="sheet"><h1>${po.pbsPO}</h1><h2>${shipNo !== "none" ? shipNo : ""}</h2>`;
           html += `<table><thead><tr><th>Status</th><th>Line#</th><th>Part Ordered</th><th>Part Processed</th><th>Facility</th><th>Qty Ord</th><th>Qty Proc</th><th>Ship#</th><th>Notes</th></tr></thead><tbody>`;
           const nonShipped = allRows.filter(r => r.status !== "Shipped").sort((a, b) => a.partOrdered.localeCompare(b.partOrdered));
           const shipped = allRows.filter(r => r.status === "Shipped" && r.shipmentNo === shipNo).sort((a, b) => a.partProcessed.localeCompare(b.partProcessed));
@@ -647,22 +642,25 @@ td{padding:3px 6px;font-size:9pt}
             const scan = scannedItems.find(s => s.partNumber === partToMatch && s.shippingOrder === r.shipmentNo);
             const notes = [];
             let qtyHtml = String(r.qtyProc);
-            if (qtyDiff) notes.push(`Ord:${r.qtyOrdered} Proc:${r.qtyProc} (${r.qtyProc - r.qtyOrdered > 0 ? "+" : ""}${r.qtyProc - r.qtyOrdered})`);
-            if (scan) {
-              if (scan.quantity === r.qtyProc) {
-                qtyHtml = qtyDiff
-                  ? `<span class="circ circ-diff">${r.qtyProc}</span>`
-                  : `<span class="circ circ-match">${r.qtyProc}</span>`;
-                notes.push(`✓ Scanned: ${scan.quantity}`);
-              } else {
-                qtyHtml = `<span class="circ circ-miss">${r.qtyProc}</span>`;
-                notes.push(`Scanned: ${scan.quantity} (exp ${r.qtyProc})`);
-              }
-            } else if (qtyDiff) {
-              qtyHtml = `<span class="circ circ-diff">${r.qtyProc}</span>`;
-            }
+            let tdExtra = "";
             if (isSup) notes.push(`SUP: ${r.partOrdered}`);
-            html += `<tr><td>${r.status}</td><td></td><td>${r.partOrdered}</td><td${isSup ? ' class="pink"' : ""}>${r.partProcessed}</td><td>${r.facility}</td><td>${r.qtyOrdered}</td><td>${qtyHtml}</td><td>${r.shipmentNo || ""}</td><td class="notes">${notes.join(" | ")}</td></tr>`;
+            if (qtyDiff) notes.push(`Ord:${r.qtyOrdered} Proc:${r.qtyProc} (${r.qtyProc - r.qtyOrdered > 0 ? "+" : ""}${r.qtyProc - r.qtyOrdered})`);
+            if (scan && scan.quantity === r.qtyProc) {
+              // Scanned matches proc — circle it
+              if (qtyDiff) {
+                // Ordered ≠ Proc but scan matches proc: circle + yellow cell
+                qtyHtml = `<span class="circ">${r.qtyProc}</span>`;
+                tdExtra = ' class="qty-diff"';
+              } else {
+                // Perfect match: ordered = proc = scanned: plain black circle
+                qtyHtml = `<span class="circ">${r.qtyProc}</span>`;
+              }
+              notes.push(`✓ Scanned: ${scan.quantity}`);
+            } else if (scan) {
+              // Scanned but doesn't match — no circle
+              notes.push(`Scanned: ${scan.quantity} (exp ${r.qtyProc})`);
+            }
+            html += `<tr><td>${r.status}</td><td></td><td>${r.partOrdered}</td><td${isSup ? ' class="pink"' : ""}>${r.partProcessed}</td><td>${r.facility}</td><td>${r.qtyOrdered}</td><td${tdExtra}>${qtyHtml}</td><td>${r.shipmentNo || ""}</td><td class="notes">${notes.join(" | ")}</td></tr>`;
           }
           html += `</tbody></table></div>`;
         }
