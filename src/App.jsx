@@ -598,12 +598,9 @@ export default function App() {
   const emailOutlook = () => {
     if (!lastPdfBase64) return;
     const body = `Please find the attached Woodstock form for dealer ${settings.dealerCode} (${settings.dealerName}).\n\nDate: ${formDate}\nCompleted by: ${completedBy || "(not specified)"}\nPhone: ${settings.phone}${poInfo ? `\nPO: ${poInfo.pbsPO} / GM Control: ${poInfo.gmControl}` : ""}\n\nSummary:\n${shortItems.length ? `- ${shortItems.length} short\n` : ""}${getDipp().length ? `- ${getDipp().length} DIPP\n` : ""}${getWD().length ? `- ${getWD().length} wrong dealer\n` : ""}`;
-    // Open mailto: in default email client
-    const mailto = `mailto:${encodeURIComponent(settings.wdkEmail)}?cc=${encodeURIComponent(getCCStr().replace(/"[^"]*"\s*/g, "").replace(/[<>]/g, ""))}&subject=${encodeURIComponent(emailSubject)}&body=${encodeURIComponent(body)}`;
-    window.open(mailto, "_blank");
-    // Also download PDF so they can attach it
-    const a = document.createElement("a"); a.href = URL.createObjectURL(lastPdfBlob); a.download = lastPdfName; a.click();
-    showFB("✓ Email opened + PDF downloaded — attach the PDF", t.green);
+    const eml = buildEML({ to: settings.wdkEmail, cc: getCCStr(), subject: emailSubject, bodyText: body, pdfBase64: lastPdfBase64, pdfFilename: lastPdfName });
+    const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([eml], { type: "message/rfc822" })); a.download = `woodstock_${formDate}.eml`; document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    showFB("✓ .eml downloaded — open in Outlook (auto-attach coming with desktop app)", t.green);
   };
   const downloadPinkSheet = async () => {
     try {
