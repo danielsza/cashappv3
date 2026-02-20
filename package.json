@@ -41,6 +41,7 @@
   },
   "dependencies": {
     "exceljs": "^4.4.0",
+    "imapflow": "^1.2.10",
     "node-windows": "^1.0.0-beta.8",
     "pdf-lib": "^1.17.1",
     "react": "^18.3.1",

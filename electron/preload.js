@@ -22,6 +22,10 @@ contextBridge.exposeInMainWorld("electronAPI", {
   // Auto-import: Outlook attachment extractor
   extractOutlookAttachments: (opts) => ipcRenderer.invoke("extract-outlook-attachments", opts),
 
+  // Auto-import: IMAP email fetch
+  imapFetch: (opts) => ipcRenderer.invoke("imap-fetch", opts),
+  imapTest: (opts) => ipcRenderer.invoke("imap-test", opts),
+
   // Check if running in Electron
   isElectron: true,
 });

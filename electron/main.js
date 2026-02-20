@@ -245,3 +245,119 @@ Write-Output "$count"
     return { success: false, error: err.message };
   }
 });
+
+// ─── Auto-Import: IMAP Email Fetch ──────────────────────────────
+ipcMain.handle("imap-fetch", async (event, { host, port, secure, user, pass, senderFilter, subjectFilter, daysBack, targetFolder }) => {
+  try {
+    const { ImapFlow } = require("imapflow");
+    if (!fs.existsSync(targetFolder)) fs.mkdirSync(targetFolder, { recursive: true });
+
+    const client = new ImapFlow({
+      host, port: port || (secure ? 993 : 143),
+      secure: secure !== false,
+      auth: { user, pass },
+      logger: false,
+    });
+
+    await client.connect();
+    const lock = await client.getMailboxLock("INBOX");
+    let count = 0;
+
+    try {
+      const since = new Date();
+      since.setDate(since.getDate() - (daysBack || 1));
+
+      // Build search criteria
+      const searchCriteria = { since };
+      if (senderFilter) searchCriteria.from = senderFilter;
+      if (subjectFilter) searchCriteria.subject = subjectFilter;
+
+      const messages = client.fetch(searchCriteria, {
+        envelope: true,
+        bodyStructure: true,
+        source: true,
+      });
+
+      for await (const msg of messages) {
+        // Parse MIME to find .xlsx attachments
+        const source = msg.source.toString();
+        const parts = parseMimeParts(source);
+
+        for (const part of parts) {
+          if (part.filename && /\.xlsx$/i.test(part.filename)) {
+            const savePath = path.join(targetFolder, part.filename);
+            fs.writeFileSync(savePath, part.content);
+            count++;
+          }
+        }
+      }
+    } finally {
+      lock.release();
+    }
+
+    await client.logout();
+    return { success: true, count };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
+// Simple MIME parser for extractments
+function parseMimeParts(rawEmail) {
+  const parts = [];
+  // Find boundary from Content-Type header
+  const boundaryMatch = rawEmail.match(/boundary="?([^";\r\n]+)"?/i);
+  if (!boundaryMatch) return parts;
+
+  const boundary = boundaryMatch[1];
+  const sections = rawEmail.split("--" + boundary);
+
+  for (const section of sections) {
+    // Look for attachment with .xlsx filename
+    const filenameMatch = section.match(/filename="?([^";\r\n]+\.xlsx)"?/i);
+    if (!filenameMatch) continue;
+
+    const filename = filenameMatch[1].trim();
+    // Find Content-Transfer-Encoding
+    const encodingMatch = section.match(/Content-Transfer-Encoding:\s*(\S+)/i);
+    const encoding = encodingMatch ? encodingMatch[1].toLowerCase() : "7bit";
+
+    // Extract body (after double newline/CRLF)
+    const bodyStart = section.indexOf("\r\n\r\n");
+    if (bodyStart === -1) continue;
+    let body = section.substring(bodyStart + 4).trim();
+
+    // Remove trailing boundary marker
+    const trailingBoundary = body.lastIndexOf("--" + boundary);
+    if (trailingBoundary > 0) body = body.substring(0, trailingBoundary).trim();
+
+    let content;
+    if (encoding === "base64") {
+      content = Buffer.from(body.replace(/\s/g, ""), "base64");
+    } else {
+      content = Buffer.from(body);
+    }
+
+    parts.push({ filename, content });
+  }
+  return parts;
+}
+
+// IMAP connection test
+ipcMain.handle("imap-test", async (event, { host, port, secure, user, pass }) => {
+  try {
+    const { ImapFlow } = require("imapflow");
+    const client = new ImapFlow({
+      host, port: port || (secure ? 993 : 143),
+      secure: secure !== false,
+      auth: { user, pass },
+      logger: false,
+    });
+    await client.connect();
+    const mailbox = await client.status("INBOX", { messages: true, unseen: true });
+    await client.logout();
+    return { success: true, messages: mailbox.messages, unseen: mailbox.unseen };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});

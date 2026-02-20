@@ -41,6 +41,9 @@ const DEFAULTS = {
   users: ["Daniel"], defaultUser: "Daniel",
   highlightColor: "#c2f4fc", customPdfTemplate: "",
   gcImportFolder: "", gcOutlookSender: "", gcOutlookSubject: "",
+  showBinLocations: true, showPartNames: true,
+  imapHost: "", imapPort: 993, imapSecure: true, imapUser: "", imapPass: "",
+  imapSender: "", imapSubject: "",
 };
 
 // ─── Barcode Helpers ─────────────────────────────────────────────
@@ -418,7 +421,8 @@ function buildSubjectParts(si, di, wi) { const p = []; if (di.length) p.push("DI
 function buildSubject(parts, dc, po) { return `${parts.length ? parts.join(" / ") : "Woodstock Form"} - ${dc}${po ? ` - ${po.gmControl || po.pbsPO}` : ""}`; }
 
 // ─── Pink Sheet Generator ───────────────────────────────────────
-async function generatePinkSheet(purchaseOrders, activePO, scannedItems = []) {
+async function generatePinkSheet(purchaseOrders, activePO, scannedItems = [], opts = {}) {
+  const { showBin = true, showName = true, gcEnrichment = {} } = opts;
   const wb = new ExcelJS.Workbook();
   const pinkFill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFF80FF" } };
   const boldFont = { bold: true, size: 11, name: "Arial" };
@@ -965,6 +969,8 @@ export default function App() {
   const downloadPinkSheet = async () => {
     try {
       const hlColor = settings.highlightColor || "#c2f4fc";
+      const showBin = settings.showBinLocations !== false;
+      const showName = settings.showPartNames !== false;
       const pos = activePO === "__all__" ? purchaseOrders : purchaseOrders.filter(p => p.pbsPO === activePO);
       if (!pos.length) { showFB("No PO data", t.red); return; }
       let html = `<html><head><title>Pink Sheet</title><style>
@@ -979,6 +985,7 @@ td{padding:3px 6px;font-size:9pt}
 .sep td{border-bottom:3px solid #000}
 .hl{background:${hlColor};font-weight:bold}
 .notes{font-size:8pt;color:#555}
+.pn{font-size:7pt;color:#666;max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .circ{display:inline-block;min-width:18px;text-align:center;padding:1px 6px;font-weight:bold;border-radius:50%;border:2px solid #000}
 .qty-diff{background:${hlColor}}
 </style></head><body>`;
@@ -989,13 +996,15 @@ td{padding:3px 6px;font-size:9pt}
         if (!shipNums.length || noShipNum) shipNums.push("none");
         for (const shipNo of shipNums) {
           html += `<div class="sheet"><h1>${po.pbsPO}</h1><h2>${shipNo !== "none" ? shipNo : ""}</h2>`;
-          html += `<table><thead><tr><th>Status</th><th>Line#</th><th>Part Ordered</th><th>Part Processed</th><th>Facility</th><th>Qty Ord</th><th>Qty Proc</th><th>Ship#</th><th>Bin</th><th>Notes</th></tr></thead><tbody>`;
+          html += `<table><thead><tr><th>Status</th><th>Part Ordered</th><th>Part Processed</th>${showName ? "<th>Description</th>" : ""}<th>Fac</th><th>Qty Ord</th><th>Qty Proc</th><th>Ship#</th>${showBin ? "<th>Bin</th>" : ""}<th>Notes</th></tr></thead><tbody>`;
           const nonShipped = allRows.filter(r => !isShippedStatus(r.status)).sort((a, b) => a.partOrdered.localeCompare(b.partOrdered));
           const shipped = allRows.filter(r => isShippedStatus(r.status) && (shipNo === "none" ? !r.shipmentNo : r.shipmentNo === shipNo)).sort((a, b) => (a.bin || "").localeCompare(b.bin || "") || a.partProcessed.localeCompare(b.partProcessed));
+          const enr = (r) => gcEnrichment[r.partProcessed || r.partOrdered] || {};
           for (const r of nonShipped) {
             const isSup = r.partOrdered && r.partProcessed && r.partOrdered !== r.partProcessed;
             const isLast = r === nonShipped[nonShipped.length - 1] && shipped.length > 0;
-            html += `<tr${isLast ? ' class="sep"' : ""}><td>${r.status}</td><td></td><td>${r.partOrdered}</td><td${isSup ? ' class="hl"' : ""}>${r.partProcessed}</td><td>${r.facility}</td><td>${r.qtyOrdered}</td><td>${r.qtyProc}</td><td>${r.shipmentNo || ""}</td><td></td><td></td></tr>`;
+            const name = r.partName || enr(r).partName || "";
+            html += `<tr${isLast ? ' class="sep"' : ""}><td>${r.status}</td><td>${r.partOrdered}</td><td${isSup ? ' class="hl"' : ""}>${r.partProcessed}</td>${showName ? `<td class="pn" title="${name}">${name}</td>` : ""}<td>${r.facility}</td><td>${r.qtyOrdered}</td><td>${r.qtyProc}</td><td>${r.shipmentNo || ""}</td>${showBin ? "<td></td>" : ""}<td></td></tr>`;
           }
           for (const r of shipped) {
             const isSup = r.partOrdered && r.partProcessed && r.partOrdered !== r.partProcessed;
@@ -1008,21 +1017,19 @@ td{padding:3px 6px;font-size:9pt}
             if (isSup) notes.push(`SUP: ${r.partOrdered}`);
             if (qtyDiff) notes.push(`Ord:${r.qtyOrdered} Proc:${r.qtyProc} (${r.qtyProc - r.qtyOrdered > 0 ? "+" : ""}${r.qtyProc - r.qtyOrdered})`);
             if (scan && scan.quantity === r.qtyProc) {
-              // Scanned matches proc — circle it
               if (qtyDiff) {
-                // Ordered ≠ Proc but scan matches proc: circle + yellow cell
                 qtyHtml = `<span class="circ">${r.qtyProc}</span>`;
                 tdExtra = ' class="qty-diff"';
               } else {
-                // Perfect match: ordered = proc = scanned: plain black circle
                 qtyHtml = `<span class="circ">${r.qtyProc}</span>`;
               }
               notes.push(`✓ Scanned: ${scan.quantity}`);
             } else if (scan) {
-              // Scanned but doesn't match — no circle
               notes.push(`Scanned: ${scan.quantity} (exp ${r.qtyProc})`);
             }
-            html += `<tr><td>${r.status}</td><td></td><td>${r.partOrdered}</td><td${isSup ? ' class="hl"' : ""}>${r.partProcessed}</td><td>${r.facility}</td><td>${r.qtyOrdered}</td><td${tdExtra}>${qtyHtml}</td><td>${r.shipmentNo || ""}</td><td>${r.bin || gcEnrichment[r.partProcessed || r.partOrdered]?.bin || ""}</td><td class="notes">${notes.join(" | ")}</td></tr>`;
+            const bin = r.bin || enr(r).bin || "";
+            const name = r.partName || enr(r).partName || "";
+            html += `<tr><td>${r.status}</td><td>${r.partOrdered}</td><td${isSup ? ' class="hl"' : ""}>${r.partProcessed}</td>${showName ? `<td class="pn" title="${name}">${name}</td>` : ""}<td>${r.facility}</td><td>${r.qtyOrdered}</td><td${tdExtra}>${qtyHtml}</td><td>${r.shipmentNo || ""}</td>${showBin ? `<td>${bin}</td>` : ""}<td class="notes">${notes.join(" | ")}</td></tr>`;
           }
           html += `</tbody></table></div>`;
         }
@@ -1093,24 +1100,52 @@ td{padding:3px 6px;font-size:9pt}
             </div>
           </>)}
           {settingsTab === "import" && (<>
-            <div style={{ marginBottom: 12, fontSize: 11, color: t.textMuted }}>GlobalConnect data import — Answerback and Shipment XLSX files. Upload manually or set up auto-import.</div>
-            <div style={{ marginBottom: 14 }}><label style={S.lbl}>Auto-Import Folder {!window.electronAPI?.isElectron && <span style={{ fontSize: 9, color: t.textFaint }}>(Desktop app only)</span>}</label>
-              <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 4 }}>
+            <div style={{ marginBottom: 12, fontSize: 11, color: t.textMuted }}>GlobalConnect data import and pink sheet display options.</div>
+
+            <div style={{ fontSize: 12, fontWeight: 700, color: t.text, marginBottom: 8, marginTop: 4 }}>📋 Pink Sheet Display</div>
+            <div style={{ display: "flex", gap: 16, marginBottom: 16 }}>
+              <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: t.text, cursor: "pointer" }}><input type="checkbox" checked={settingsDraft.showBinLocations !== false} onChange={e => setSettingsDraft(p => ({ ...p, showBinLocations: e.target.checked }))} /> Show Bin Locations</label>
+              <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: t.text, cursor: "pointer" }}><input type="checkbox" checked={settingsDraft.showPartNames !== false} onChange={e => setSettingsDraft(p => ({ ...p, showPartNames: e.target.checked }))} /> Show Part Descriptions</label>
+            </div>
+
+            <div style={{ fontSize: 12, fontWeight: 700, color: t.text, marginBottom: 8 }}>📂 Folder Watch {!window.electronAPI?.isElectron && <span style={{ fontSize: 9, color: t.textFaint }}>(Desktop app only)</span>}</div>
+            <div style={{ marginBottom: 14 }}>
+              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                 <input style={{ ...S.mI, flex: 1, marginBottom: 0, fontFamily: "monospace", fontSize: 11 }} placeholder="C:\GlobalConnect\Import" value={settingsDraft.gcImportFolder || ""} onChange={e => setSettingsDraft(p => ({ ...p, gcImportFolder: e.target.value }))} />
-                {window.electronAPI?.isElectron && <button style={S.btn(t.bg3, t.text)} onClick={async () => { const folder = await window.electronAPI.browseFolder(); if (folder) setSettingsDraft(p => ({ ...p, gcImportFolder: folder })); }}>📂 Browse</button>}
+                {window.electronAPI?.isElectron && <button style={S.btn(t.bg3, t.text)} onClick={async () => { const folder = await window.electronAPI.browseFolder(); if (folder) setSettingsDraft(p => ({ ...p, gcImportFolder: folder })); }}>📂</button>}
               </div>
-              <div style={{ fontSize: 10, color: t.textMuted, marginTop: 4 }}>Drop .xlsx files here and they auto-load into the app. Works with Outlook rules that save attachments to a folder.</div>
+              <div style={{ fontSize: 10, color: t.textMuted, marginTop: 4 }}>Drop .xlsx files here — auto-detects Answerback / Shipment / PWB+ format.</div>
             </div>
-            <div style={{ marginBottom: 14 }}><label style={S.lbl}>Outlook Auto-Extract {!window.electronAPI?.isElectron && <span style={{ fontSize: 9, color: t.textFaint }}>(Desktop app only)</span>}</label>
-              <div style={{ display: "flex", gap: 8, marginTop: 4 }}><div style={{ flex: 1 }}><input style={{ ...S.mI, marginBottom: 0, fontSize: 11 }} placeholder="Sender filter (e.g. globalconnect)" value={settingsDraft.gcOutlookSender || ""} onChange={e => setSettingsDraft(p => ({ ...p, gcOutlookSender: e.target.value }))} /><div style={{ fontSize: 9, color: t.textFaint }}>Sender email contains</div></div><div style={{ flex: 1 }}><input style={{ ...S.mI, marginBottom: 0, fontSize: 11 }} placeholder="Subject filter (e.g. shipment)" value={settingsDraft.gcOutlookSubject || ""} onChange={e => setSettingsDraft(p => ({ ...p, gcOutlookSubject: e.target.value }))} /><div style={{ fontSize: 9, color: t.textFaint }}>Subject contains</div></div></div>
-              {window.electronAPI?.isElectron && settingsDraft.gcImportFolder && <button style={{ ...S.btn(t.accent, "#fff"), marginTop: 8 }} onClick={async () => { const res = await window.electronAPI.extractOutlookAttachments({ senderFilter: settingsDraft.gcOutlookSender, subjectFilter: settingsDraft.gcOutlookSubject, targetFolder: settingsDraft.gcImportFolder, daysBack: 1 }); if (res.success) showFB(`✓ Extracted ${res.count} attachments from Outlook`, t.green); else showFB(`Outlook error: ${res.error}`, t.red); }}>📧 Extract from Outlook Now</button>}
+
+            <div style={{ fontSize: 12, fontWeight: 700, color: t.text, marginBottom: 8 }}>📧 IMAP Email Fetch</div>
+            <div style={{ background: t.bg0, border: `1px solid ${t.border}`, borderRadius: 6, padding: 10, marginBottom: 12 }}>
+              <div style={{ display: "flex", gap: 8, marginBottom: 6 }}>
+                <div style={{ flex: 2 }}><label style={{ fontSize: 9, color: t.textFaint }}>IMAP Host</label><input style={{ ...S.mI, marginBottom: 0, fontSize: 11 }} placeholder="imap.gmail.com" value={settingsDraft.imapHost || ""} onChange={e => setSettingsDraft(p => ({ ...p, imapHost: e.target.value }))} /></div>
+                <div style={{ flex: 0.6 }}><label style={{ fontSize: 9, color: t.textFaint }}>Port</label><input style={{ ...S.mI, marginBottom: 0, fontSize: 11 }} placeholder="993" type="number" value={settingsDraft.imapPort || 993} onChange={e => setSettingsDraft(p => ({ ...p, imapPort: parseInt(e.target.value) || 993 }))} /></div>
+                <div style={{ flex: 0.4, display: "flex", alignItems: "flex-end", paddingBottom: 2 }}><label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10, color: t.text, cursor: "pointer" }}><input type="checkbox" checked={settingsDraft.imapSecure !== false} onChange={e => setSettingsDraft(p => ({ ...p, imapSecure: e.target.checked }))} /> SSL</label></div>
+              </div>
+              <div style={{ display: "flex", gap: 8, marginBottom: 6 }}>
+                <div style={{ flex: 1 }}><label style={{ fontSize: 9, color: t.textFaint }}>Username / Email</label><input style={{ ...S.mI, marginBottom: 0, fontSize: 11 }} placeholder="parts@dealer.com" value={settingsDraft.imapUser || ""} onChange={e => setSettingsDraft(p => ({ ...p, imapUser: e.target.value }))} /></div>
+                <div style={{ flex: 1 }}><label style={{ fontSize: 9, color: t.textFaint }}>Password / App Password</label><input style={{ ...S.mI, marginBottom: 0, fontSize: 11 }} type="password" placeholder="••••••••" value={settingsDraft.imapPass || ""} onChange={e => setSettingsDraft(p => ({ ...p, imapPass: e.target.value }))} /></div>
+              </div>
+              <div style={{ display: "flex", gap: 8, marginBottom: 6 }}>
+                <div style={{ flex: 1 }}><label style={{ fontSize: 9, color: t.textFaint }}>From contains</label><input style={{ ...S.mI, marginBottom: 0, fontSize: 11 }} placeholder="globalconnect@gm.com" value={settingsDraft.imapSender || ""} onChange={e => setSettingsDraft(p => ({ ...p, imapSender: e.target.value }))} /></div>
+                <div style={{ flex: 1 }}><label style={{ fontSize: 9, color: t.textFaint }}>Subject contains</label><input style={{ ...S.mI, marginBottom: 0, fontSize: 11 }} placeholder="shipment" value={settingsDraft.imapSubject || ""} onChange={e => setSettingsDraft(p => ({ ...p, imapSubject: e.target.value }))} /></div>
+              </div>
+              {window.electronAPI?.isElectron && <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                <button style={S.btn(t.bg3, t.text)} onClick={async () => { if (!settingsDraft.imapHost || !settingsDraft.imapUser) { showFB("Fill in host + user first", t.red); return; } const res = await window.electronAPI.imapTest({ host: settingsDraft.imapHost, port: settingsDraft.imapPort, secure: settingsDraft.imapSecure, user: settingsDraft.imapUser, pass: settingsDraft.imapPass }); if (res.success) showFB(`✓ Connected — ${res.messages} messages, ${res.unseen} unread`, t.green); else showFB(`IMAP error: ${res.error}`, t.red); }}>🔌 Test Connection</button>
+                <button style={S.btn(t.accent, "#fff")} onClick={async () => { if (!settingsDraft.imapHost || !settingsDraft.gcImportFolder) { showFB("Set IMAP host + import folder first", t.red); return; } const res = await window.electronAPI.imapFetch({ host: settingsDraft.imapHost, port: settingsDraft.imapPort, secure: settingsDraft.imapSecure, user: settingsDraft.imapUser, pass: settingsDraft.imapPass, senderFilter: settingsDraft.imapSender, subjectFilter: settingsDraft.imapSubject, daysBack: 1, targetFolder: settingsDraft.gcImportFolder }); if (res.success) showFB(`✓ Fetched ${res.count} .xlsx attachments`, t.green); else showFB(`IMAP error: ${res.error}`, t.red); }}>📧 Fetch Now</button>
+              </div>}
+              {!window.electronAPI?.isElectron && <div style={{ fontSize: 10, color: t.textFaint, marginTop: 6 }}>IMAP fetch available in the Electron desktop app. In browser mode, use Folder Watch or manual upload.</div>}
             </div>
+
             <div style={{ background: t.bg0, border: `1px solid ${t.border}`, borderRadius: 6, padding: 12, marginTop: 8 }}>
-              <div style={{ fontSize: 11, fontWeight: 600, color: t.text, marginBottom: 6 }}>How Auto-Import Works</div>
+              <div style={{ fontSize: 11, fontWeight: 600, color: t.text, marginBottom: 6 }}>Common IMAP Servers</div>
               <div style={{ fontSize: 10, color: t.textMuted, lineHeight: 1.6 }}>
-                <strong>Option 1: Outlook Rule</strong> — Create an Outlook rule that saves GlobalConnect email attachments to the Import Folder above. The app watches that folder and auto-loads new .xlsx files.<br/>
-                <strong>Option 2: Extract Button</strong> — Click "Extract from Outlook Now" to scan your inbox for matching emails and pull their .xlsx attachments into the import folder.<br/>
-                <strong>Option 3: Manual</strong> — Just drag and drop .xlsx files onto the PO upload area. The app auto-detects Answerback vs Shipment vs PWB+ format.
+                <strong>Gmail:</strong> imap.gmail.com:993 — requires App Password (Security → 2FA → App Passwords)<br/>
+                <strong>Outlook/365:</strong> outlook.office365.com:993 — use email + password or App Password<br/>
+                <strong>Bell:</strong> imap.bell.net:993<br/>
+                <strong>Exchange On-Prem:</strong> Your mail server hostname:993
               </div>
             </div>
           </>)}
