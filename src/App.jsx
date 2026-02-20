@@ -239,9 +239,9 @@ function mergeGlobalConnect(answerbacks, shipments) {
       // Start with answerback data (has all statuses)
       for (const line of ab.lines) {
         const enrich = sh?.enrichment?.[line.partProcessed || line.partOrdered] || {};
-        // Try to find matching shipment for shipped lines
+        // Try to find matching shipment for shipped/ship direct lines
         let shipNo = line.shipmentNo;
-        if (line.status === "Shipped" && !shipNo && sh) {
+        if (isShippedStatus(line.status) && !shipNo && sh) {
           const match = Object.values(sh.shipments).find(s =>
             s.partShipped === (line.partProcessed || line.partOrdered));
           if (match) shipNo = match.shipmentNo;
@@ -1330,16 +1330,25 @@ td{padding:3px 6px;font-size:9pt}
 
             <div style={{ fontSize: 12, fontWeight: 700, color: t.text, marginBottom: 8, marginTop: 16 }}>⚡ GlobalConnect Direct API</div>
             <div style={{ background: t.bg0, border: `1px solid ${t.border}`, borderRadius: 6, padding: 10, marginBottom: 12 }}>
-              <div style={{ display: "flex", gap: 16, marginBottom: 10 }}>
+              <div style={{ display: "flex", gap: 16, marginBottom: 10, alignItems: "center" }}>
                 <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: t.text, cursor: "pointer" }}><input type="checkbox" checked={settingsDraft.gcApiEnabled || false} onChange={e => setSettingsDraft(p => ({ ...p, gcApiEnabled: e.target.checked }))} /> Enable API Fetch</label>
+                {window.electronAPI?.gcLogin && <>
+                  {gcTokenStatus?.authenticated
+                    ? <button style={S.btn("#dc2626", "#fff")} onClick={async () => { await window.electronAPI.gcLogout(); setGcTokenStatus(null); showFB("Logged out of GlobalConnect", t.textMuted); }}>🔓 Logout</button>
+                    : <button style={S.btn("#059669", "#fff")} onClick={gcApiLogin}>🔑 Login to PWB+</button>
+                  }
+                </>}
               </div>
               <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
                 <div style={{ flex: 1 }}><label style={{ fontSize: 9, color: t.textFaint }}>Customer Code</label><input style={{ ...S.mI, marginBottom: 0, fontSize: 11, fontFamily: "monospace" }} placeholder="095207" value={settingsDraft.gcCustomerCode || ""} onChange={e => setSettingsDraft(p => ({ ...p, gcCustomerCode: e.target.value }))} /></div>
               </div>
-              <div style={{ fontSize: 10, color: t.textMuted, lineHeight: 1.5, marginTop: 6 }}>
-                Fetches shipment and answerback data directly from <strong>pwbplus.vsp.autopartners.net</strong> via the REST API. Requires a one-time login via your GM credentials — the session refreshes automatically for ~1 hour. Click "⚡ Fetch GC" in the Compare tab to pull today's data.
-              </div>
-              {gcTokenStatus?.authenticated && <div style={{ marginTop: 8, padding: 6, background: `${t.green}15`, border: `1px solid ${t.green}30`, borderRadius: 4, fontSize: 10, color: t.greenText }}>🟢 Authenticated as <strong>{gcTokenStatus.user?.name}</strong> — token expires in {Math.floor((gcTokenStatus.expiresIn || 0) / 60)} minutes</div>}
+              {gcTokenStatus?.authenticated && <div style={{ marginTop: 8, padding: 6, background: `${t.green}15`, border: `1px solid ${t.green}30`, borderRadius: 4, fontSize: 10, color: t.greenText, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <span>🟢 Authenticated as <strong>{gcTokenStatus.user?.name}</strong> — token expires in {Math.floor((gcTokenStatus.expiresIn || 0) / 60)}m {(gcTokenStatus.expiresIn || 0) % 60}s {gcTokenStatus.hasRefreshToken && <span style={{ opacity: 0.6 }}>(auto-refresh)</span>}</span>
+                <button style={{ ...S.btn("#059669", "#fff"), padding: "3px 10px", fontSize: 10 }} disabled={gcFetching} onClick={() => gcApiFetch(1)}>{gcFetching ? "⏳…" : "⚡ Test Fetch"}</button>
+              </div>}
+              {!gcTokenStatus?.authenticated && <div style={{ fontSize: 10, color: t.textMuted, lineHeight: 1.5, marginTop: 6 }}>
+                Fetches shipment and answerback data directly from <strong>pwbplus.vsp.autopartners.net</strong> REST API. Sign in with your GM credentials — token auto-refreshes silently. No more downloading Excel files!
+              </div>}
             </div>
           </>)}
           {settingsTab === "dealers" && (<>

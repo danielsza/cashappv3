@@ -60,7 +60,7 @@ async function interactiveLogin(parentWindow) {
     nonce: nonce,
     code_challenge: codeChallenge,
     code_challenge_method: "S256",
-    prompt: "login",
+    prompt: "select_account",
   }).toString();
 
   return new Promise((resolve, reject) => {
@@ -79,12 +79,19 @@ async function interactiveLogin(parentWindow) {
 
     authWindow.setMenuBarVisibility(false);
 
+    let codeHandled = false;
+
     // Watch for redirect with auth code
-    const handleNavigation = async (url) => {
+    const handleNavigation = async (event, url) => {
+      if (codeHandled) return;
       try {
         const parsed = new URL(url);
         // After login, Azure redirects back to REDIRECT_URI with ?code=...
         if (parsed.origin === new URL(REDIRECT_URI).origin && parsed.searchParams.has("code")) {
+          codeHandled = true;
+          // Stop the redirect from loading PWB+ app (race condition with SPA's MSAL)
+          if (event && event.preventDefault) event.preventDefault();
+
           const code = parsed.searchParams.get("code");
           const returnedState = parsed.searchParams.get("state");
 
@@ -93,6 +100,9 @@ async function interactiveLogin(parentWindow) {
             authWindow.close();
             return;
           }
+
+          // Show loading state
+          authWindow.loadURL("data:text/html,<html><body style='display:flex;align-items:center;justify-content:center;height:100vh;font-family:system-ui;color:%23666'><div style='text-align:center'><div style='font-size:32px;margin-bottom:12px'>🔐</div><div>Signing in...</div></div></body></html>");
 
           // Exchange code for tokens
           try {
@@ -116,13 +126,13 @@ async function interactiveLogin(parentWindow) {
       }
     };
 
-    authWindow.webContents.on("will-redirect", (event, url) => handleNavigation(url));
-    authWindow.webContents.on("will-navigate", (event, url) => handleNavigation(url));
+    authWindow.webContents.on("will-redirect", (event, url) => handleNavigation(event, url));
+    authWindow.webContents.on("will-navigate", (event, url) => handleNavigation(event, url));
     // Also check after page loads (some flows don't trigger will-redirect)
-    authWindow.webContents.on("did-navigate", (event, url) => handleNavigation(url));
+    authWindow.webContents.on("did-navigate", (event, url) => handleNavigation(null, url));
 
     authWindow.on("closed", () => {
-      if (!currentToken) {
+      if (!codeHandled) {
         reject(new Error("Login window closed without completing authentication"));
       }
     });
