@@ -466,7 +466,7 @@ async function generatePinkSheet(purchaseOrders, activePO, scannedItems = [], op
 
       // Separate non-shipped vs shipped for this shipping order
       const nonShipped = allRows.filter(r => !isShippedStatus(r.status)).sort((a, b) => a.partOrdered.localeCompare(b.partOrdered));
-      const shipped = allRows.filter(r => isShippedStatus(r.status) && (shipNo === "none" ? !r.shipmentNo : r.shipmentNo === shipNo)).sort((a, b) => (a.bin || "").localeCompare(b.bin || "") || a.partProcessed.localeCompare(b.partProcessed));
+      const shipped = allRows.filter(r => isShippedStatus(r.status) && (shipNo === "none" ? !r.shipmentNo : r.shipmentNo === shipNo)).sort((a, b) => a.partProcessed.localeCompare(b.partProcessed));
 
       // Skip if nothing
       let row = 6;
@@ -998,7 +998,7 @@ td{padding:3px 6px;font-size:9pt}
           html += `<div class="sheet"><h1>${po.pbsPO}</h1><h2>${shipNo !== "none" ? shipNo : ""}</h2>`;
           html += `<table><thead><tr><th>Status</th><th>Part Ordered</th><th>Part Processed</th>${showName ? "<th>Description</th>" : ""}<th>Fac</th><th>Qty Ord</th><th>Qty Proc</th><th>Ship#</th>${showBin ? "<th>Bin</th>" : ""}<th>Notes</th></tr></thead><tbody>`;
           const nonShipped = allRows.filter(r => !isShippedStatus(r.status)).sort((a, b) => a.partOrdered.localeCompare(b.partOrdered));
-          const shipped = allRows.filter(r => isShippedStatus(r.status) && (shipNo === "none" ? !r.shipmentNo : r.shipmentNo === shipNo)).sort((a, b) => (a.bin || "").localeCompare(b.bin || "") || a.partProcessed.localeCompare(b.partProcessed));
+          const shipped = allRows.filter(r => isShippedStatus(r.status) && (shipNo === "none" ? !r.shipmentNo : r.shipmentNo === shipNo)).sort((a, b) => a.partProcessed.localeCompare(b.partProcessed));
           const enr = (r) => gcEnrichment[r.partProcessed || r.partOrdered] || {};
           for (const r of nonShipped) {
             const isSup = r.partOrdered && r.partProcessed && r.partOrdered !== r.partProcessed;
