@@ -616,10 +616,10 @@ table{border-collapse:collapse;width:100%}
 th{font-weight:bold;text-align:left;padding:3px 6px;font-size:9pt;border-bottom:1px solid #000}
 td{padding:3px 6px;font-size:9pt}
 .sep td{border-bottom:3px solid #000}
-.pink{background:#ccccff;font-weight:bold}
+.pink{background:#c2f4fc;font-weight:bold}
 .notes{font-size:8pt;color:#555}
 .circ{display:inline-block;min-width:18px;text-align:center;padding:1px 6px;font-weight:bold;border-radius:50%;border:2px solid #000}
-.qty-diff{background:#ccccff}
+.qty-diff{background:#c2f4fc}
 </style></head><body>`;
       for (const po of pos) {
         const allRows = po.data;
