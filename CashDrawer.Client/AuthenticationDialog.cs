@@ -57,6 +57,14 @@ namespace CashDrawer.Client
                 Width = 230,
                 Font = new Font("Segoe UI", 10)
             };
+            _usernameText.KeyDown += (s, e) =>
+            {
+                if (e.KeyCode == Keys.Enter)
+                {
+                    e.SuppressKeyPress = true;
+                    _passwordText.Focus();
+                }
+            };
             this.Controls.Add(_usernameText);
             y += 40;
             
@@ -76,6 +84,14 @@ namespace CashDrawer.Client
                 Width = 230,
                 Font = new Font("Segoe UI", 10),
                 UseSystemPasswordChar = true
+            };
+            _passwordText.KeyDown += (s, e) =>
+            {
+                if (e.KeyCode == Keys.Enter)
+                {
+                    e.SuppressKeyPress = true;
+                    OkButton_Click(this, EventArgs.Empty);
+                }
             };
             this.Controls.Add(_passwordText);
             y += 50;

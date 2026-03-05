@@ -1,0 +1,55 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+    <Fragment>
+        <DirectoryRef Id="NetworkAdminFolder">
+            <Component Id="cmp2C4BB4D6FC460054EF67EACB00DB9AFD" Guid="{1E79AA62-7F89-4B31-B1AA-A689B2381904}">
+                <File Id="fil55F61C8740820DA4C40EDA944A6EDA7D" KeyPath="yes" Source="$(var.NetworkAdminSource)\CashDrawer.NetworkAdmin.deps.json" />
+            </Component>
+            <Component Id="cmp2D3299BDA563EC0AC5B67C38B30BBFF0" Guid="{F26772BB-4B32-40DE-815A-FD162F9C1877}">
+                <File Id="fil02A31E5CE7D06911999814FCD6B3558C" KeyPath="yes" Source="$(var.NetworkAdminSource)\CashDrawer.NetworkAdmin.dll" />
+            </Component>
+            <Component Id="cmp2F959A5485CBA603DC9E602963891051" Guid="{BD7267E6-710A-4CF8-BB15-AF27346AA388}">
+                <File Id="fil34A75CE41573AD95356E6C0781668696" KeyPath="yes" Source="$(var.NetworkAdminSource)\CashDrawer.NetworkAdmin.exe" />
+            </Component>
+            <Component Id="cmp1E52C3F196D81FF8F23FD90D0B5515EC" Guid="{A991BA9C-A310-4B0C-BB7C-8C174721BEA4}">
+                <File Id="fil9922E3D217A5278C01ABB62FD21C7922" KeyPath="yes" Source="$(var.NetworkAdminSource)\CashDrawer.NetworkAdmin.pdb" />
+            </Component>
+            <Component Id="cmpA5ED04B2AD427BA1B67F46B0B92B340D" Guid="{54400C96-9F79-47CA-96FB-2B96CD6AFCA0}">
+                <File Id="fil99C6AE49A851A3AB6B8FA0503F200949" KeyPath="yes" Source="$(var.NetworkAdminSource)\CashDrawer.NetworkAdmin.runtimeconfig.json" />
+            </Component>
+            <Component Id="cmpF0AEBFFD8A2F271F56186C4ED8961C1C" Guid="{A1A9BB06-79AB-4346-BF3E-4A1A6614386B}">
+                <File Id="fil9D0B91EF8D4A792822C36DAA5B2D4EDD" KeyPath="yes" Source="$(var.NetworkAdminSource)\CashDrawer.Shared.dll" />
+            </Component>
+            <Component Id="cmp686ADB8231439D198E9C25C801FC648E" Guid="{BCC70B3F-1A98-49AE-AFA8-E6841EBED571}">
+                <File Id="filDFD5B45B6DF3805446986A1197B70F7A" KeyPath="yes" Source="$(var.NetworkAdminSource)\CashDrawer.Shared.pdb" />
+            </Component>
+            <Component Id="cmp0D136585D5089508D385915C623A07A6" Guid="{8BFD547B-6D38-421B-9144-8CD6F6C040A3}">
+                <File Id="filE659BCB82A6C67C7754AB3FF4344B7D0" KeyPath="yes" Source="$(var.NetworkAdminSource)\Microsoft.Extensions.DependencyInjection.Abstractions.dll" />
+            </Component>
+            <Component Id="cmp2DC3A5F0569838B6E88E14326FB83752" Guid="{811CD10E-EE16-4795-95A2-6DF5135F9071}">
+                <File Id="filD43B5B9FB4BDD087DB9B3A732AFA8227" KeyPath="yes" Source="$(var.NetworkAdminSource)\Microsoft.Extensions.Logging.Abstractions.dll" />
+            </Component>
+            <Component Id="cmp2F185DB563921928EBC8A12C7B9F2AB9" Guid="{DE0E9241-0D4A-43C9-BCE7-05425333F59A}">
+                <File Id="filC83070BFF3158A6DCD56985EF2EDAFF2" KeyPath="yes" Source="$(var.NetworkAdminSource)\Microsoft.Extensions.Options.dll" />
+            </Component>
+            <Component Id="cmp4BB21D1BA640EBFE7FD853E0F5A99C42" Guid="{64D5BACC-4F23-4CFA-81E5-320E933D4F4E}">
+                <File Id="filF8AB658B4F490FB45CCB6E8D7489D853" KeyPath="yes" Source="$(var.NetworkAdminSource)\Microsoft.Extensions.Primitives.dll" />
+            </Component>
+        </DirectoryRef>
+    </Fragment>
+    <Fragment>
+        <ComponentGroup Id="NetworkAdminComponents">
+            <ComponentRef Id="cmp2C4BB4D6FC460054EF67EACB00DB9AFD" />
+            <ComponentRef Id="cmp2D3299BDA563EC0AC5B67C38B30BBFF0" />
+            <ComponentRef Id="cmp2F959A5485CBA603DC9E602963891051" />
+            <ComponentRef Id="cmp1E52C3F196D81FF8F23FD90D0B5515EC" />
+            <ComponentRef Id="cmpA5ED04B2AD427BA1B67F46B0B92B340D" />
+            <ComponentRef Id="cmpF0AEBFFD8A2F271F56186C4ED8961C1C" />
+            <ComponentRef Id="cmp686ADB8231439D198E9C25C801FC648E" />
+            <ComponentRef Id="cmp0D136585D5089508D385915C623A07A6" />
+            <ComponentRef Id="cmp2DC3A5F0569838B6E88E14326FB83752" />
+            <ComponentRef Id="cmp2F185DB563921928EBC8A12C7B9F2AB9" />
+            <ComponentRef Id="cmp4BB21D1BA640EBFE7FD853E0F5A99C42" />
+        </ComponentGroup>
+    </Fragment>
+</Wix>

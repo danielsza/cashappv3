@@ -155,6 +155,7 @@ namespace CashDrawer.Client
                 Location = new Point(120, 27),
                 Width = 300
             };
+            _docNumberText.KeyDown += TextBox_KeyDown;
 
             // Total
             var totalLabel = new Label
@@ -170,6 +171,7 @@ namespace CashDrawer.Client
                 Text = "0.00"
             };
             _totalText.TextChanged += CalculateOut;
+            _totalText.KeyDown += TextBox_KeyDown;
 
             // IN
             var inLabel = new Label
@@ -185,6 +187,7 @@ namespace CashDrawer.Client
                 Text = "0.00"
             };
             _inText.TextChanged += CalculateOut;
+            _inText.KeyDown += TextBox_KeyDown;
 
             // OUT (auto-calculated, read-only)
             var outLabel = new Label
@@ -1439,6 +1442,33 @@ namespace CashDrawer.Client
             decimal roundedChange = CashDrawer.Shared.Utils.CanadianRounding.RoundToNickel(rawChange);
             
             _outText.Text = roundedChange.ToString("0.00");
+        }
+
+        /// <summary>
+        /// Handle Enter key to move to next field (like Tab)
+        /// </summary>
+        private void TextBox_KeyDown(object? sender, KeyEventArgs e)
+        {
+            if (e.KeyCode == Keys.Enter)
+            {
+                e.SuppressKeyPress = true; // Prevent beep
+                
+                if (sender == _docNumberText)
+                {
+                    _totalText.Focus();
+                    _totalText.SelectAll();
+                }
+                else if (sender == _totalText)
+                {
+                    _inText.Focus();
+                    _inText.SelectAll();
+                }
+                else if (sender == _inText)
+                {
+                    // Last field - trigger the Open Drawer button
+                    _openButton.PerformClick();
+                }
+            }
         }
 
         private void SettingsButton_Click(object? sender, EventArgs e)

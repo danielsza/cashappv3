@@ -1,0 +1,55 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+    <Fragment>
+        <DirectoryRef Id="ClientFolder">
+            <Component Id="cmpEFA48B31E23BFB3838D226917EC8165F" Guid="{BAAC0069-F6B4-4A8D-BF99-33569E3AACA9}">
+                <File Id="fil73B74517C8E866D1A5E7A089B1193B90" KeyPath="yes" Source="$(var.ClientSource)\CashDrawer.Client.deps.json" />
+            </Component>
+            <Component Id="cmp5A7E2BAD1AB6647EF2830E135AA33099" Guid="{DEAB7CA6-7647-4EB2-8EB0-ED28BBC6955F}">
+                <File Id="fil64D84A529DA8C25B4B991FAD5C4E33ED" KeyPath="yes" Source="$(var.ClientSource)\CashDrawer.Client.dll" />
+            </Component>
+            <Component Id="cmp254E0068CC3DA6A63818F1AB5B93B666" Guid="{E5AE2984-5172-4D33-9945-08E598A07B00}">
+                <File Id="filDB6A60C524AD81E00159ABFCF26D9A8F" KeyPath="yes" Source="$(var.ClientSource)\CashDrawer.Client.exe" />
+            </Component>
+            <Component Id="cmpD4740CEAF064F0B91D8F5FE10B29268B" Guid="{4AE036DE-92B3-443B-8D4B-AFAE1755AA32}">
+                <File Id="filE598830A8C044283E235F8AD9AB6945A" KeyPath="yes" Source="$(var.ClientSource)\CashDrawer.Client.pdb" />
+            </Component>
+            <Component Id="cmp2349B04C993A0F9729A583969916316F" Guid="{D7988D62-0A49-4DBC-AD9D-975800315BF5}">
+                <File Id="filCCC9E592875FE0A68EC64E78B4E9BC9B" KeyPath="yes" Source="$(var.ClientSource)\CashDrawer.Client.runtimeconfig.json" />
+            </Component>
+            <Component Id="cmpB6BBD2AAA285C65D1B944D823A7E77B5" Guid="{A90BE956-B1CE-400C-9D24-749B68F90FCC}">
+                <File Id="filECE5A8D68E4457E2608B124F4DB4EA9C" KeyPath="yes" Source="$(var.ClientSource)\CashDrawer.Shared.dll" />
+            </Component>
+            <Component Id="cmpA24D9E6D44FC3DEEDF01D6657416A944" Guid="{7B61D159-1017-49AA-AF78-177ACABF1CF0}">
+                <File Id="fil62DB6F7756AAB83EC2F28500ADDEF145" KeyPath="yes" Source="$(var.ClientSource)\CashDrawer.Shared.pdb" />
+            </Component>
+            <Component Id="cmpC643946507CF11A626772AF12829155B" Guid="{45D6FF8A-AC64-45D5-8C6E-EA673E72D9EE}">
+                <File Id="fil4BD7FCC453E11BC449AA660147ABBD7C" KeyPath="yes" Source="$(var.ClientSource)\Microsoft.Extensions.DependencyInjection.Abstractions.dll" />
+            </Component>
+            <Component Id="cmpCF2E27F1571672946E091506DAB45066" Guid="{88BE5494-67A0-40E3-950B-F60837B79702}">
+                <File Id="filBCA07967E8C39F50C32635F5CB37EFE2" KeyPath="yes" Source="$(var.ClientSource)\Microsoft.Extensions.Logging.Abstractions.dll" />
+            </Component>
+            <Component Id="cmpBE78233250C0DEDFE7554AF94A75FB7F" Guid="{5637EBCB-BDB9-49B7-8549-25F34F36CB70}">
+                <File Id="fil287A35B64BE77891CF13B8FF84F017C7" KeyPath="yes" Source="$(var.ClientSource)\Microsoft.Extensions.Options.dll" />
+            </Component>
+            <Component Id="cmpF5799AC3D5F30BF7CF83F29AFC97BA8C" Guid="{75BDB557-9328-4FFE-A809-B8361E9D067F}">
+                <File Id="fil9D164AE40677DEAB14177F55EDC9B2E1" KeyPath="yes" Source="$(var.ClientSource)\Microsoft.Extensions.Primitives.dll" />
+            </Component>
+        </DirectoryRef>
+    </Fragment>
+    <Fragment>
+        <ComponentGroup Id="ClientComponents">
+            <ComponentRef Id="cmpEFA48B31E23BFB3838D226917EC8165F" />
+            <ComponentRef Id="cmp5A7E2BAD1AB6647EF2830E135AA33099" />
+            <ComponentRef Id="cmp254E0068CC3DA6A63818F1AB5B93B666" />
+            <ComponentRef Id="cmpD4740CEAF064F0B91D8F5FE10B29268B" />
+            <ComponentRef Id="cmp2349B04C993A0F9729A583969916316F" />
+            <ComponentRef Id="cmpB6BBD2AAA285C65D1B944D823A7E77B5" />
+            <ComponentRef Id="cmpA24D9E6D44FC3DEEDF01D6657416A944" />
+            <ComponentRef Id="cmpC643946507CF11A626772AF12829155B" />
+            <ComponentRef Id="cmpCF2E27F1571672946E091506DAB45066" />
+            <ComponentRef Id="cmpBE78233250C0DEDFE7554AF94A75FB7F" />
+            <ComponentRef Id="cmpF5799AC3D5F30BF7CF83F29AFC97BA8C" />
+        </ComponentGroup>
+    </Fragment>
+</Wix>
