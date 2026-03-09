@@ -1283,8 +1283,8 @@ namespace CashDrawer.Client
                     _lastActionLabel.Text = $"✓ Drawer opened by {response.Name ?? response.Username} at {DateTime.Now:h:mm:ss tt}";
                     _lastActionLabel.ForeColor = Color.Green;
 
-                    // Show change due popup for Invoice transactions with change
-                    if (docType == "Invoice" && amountOut > 0)
+                    // Show change due popup for transactions where cash goes back to customer
+                    if ((docType == "Invoice" || docType == "Refund" || docType == "Change") && amountOut > 0)
                     {
                         MessageBox.Show(
                             $"Change Due:  ${amountOut:F2}",
