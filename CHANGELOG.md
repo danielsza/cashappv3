@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.10.26] - 2026-03-09
+
+### Fixed
+- **EOD expected total calculation** - Was double-counting cash for transactions where change was given
+  - Example: $10 sale, customer pays $20, $10 change → was counting $30, now correctly counts $10
+  - Fix: parse `Total:` field from log line instead of summing `IN:` + `OUT:`
+  - New log format: `parts[7]` = `"Total: X"`, old format: `parts[6]` = `"Total: X"`
+  - `totalIn` / `totalOut` retained for display fields in EOD summary response
+
 ## [3.10.25] - 2026-02-20
 
 ### Changed
