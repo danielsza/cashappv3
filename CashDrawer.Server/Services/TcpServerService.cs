@@ -1201,6 +1201,7 @@ namespace CashDrawer.Server.Services
                 // Get transaction totals for today from logs
                 decimal totalIn = 0;
                 decimal totalOut = 0;
+                decimal totalTransactions = 0;
                 int transactionCount = 0;
                 
                 var logDir = Path.Combine(
@@ -1228,9 +1229,18 @@ namespace CashDrawer.Server.Services
                                 continue;
                             }
                             
-                            // Parse "IN: 50.00" and "OUT: -10.00" format
-                            var inPart = parts[8].Trim();  // "IN: 50.00"
-                            var outPart = parts[9].Trim(); // "OUT: -10.00"
+                            // Parse "Total: 50.00", "IN: 50.00" and "OUT: -10.00" format
+                            var totalPart = parts[7].Trim(); // "Total: 50.00"
+                            var inPart = parts[8].Trim();    // "IN: 50.00"
+                            var outPart = parts[9].Trim();   // "OUT: -10.00"
+                            
+                            if (totalPart.StartsWith("Total:"))
+                            {
+                                var totalValue = totalPart.Substring(6).Trim();
+                                if (decimal.TryParse(totalValue, System.Globalization.NumberStyles.Any,
+                                    System.Globalization.CultureInfo.InvariantCulture, out var txTotal))
+                                    totalTransactions += txTotal;
+                            }
                             
                             if (inPart.StartsWith("IN:"))
                             {
@@ -1259,8 +1269,17 @@ namespace CashDrawer.Server.Services
                                 continue;
                             }
                             
+                            var totalPartOld = parts[6].Trim(); // "Total: 50.00"
                             var inPart = parts[7].Trim();
                             var outPart = parts[8].Trim();
+                            
+                            if (totalPartOld.StartsWith("Total:"))
+                            {
+                                var totalValue = totalPartOld.Substring(6).Trim();
+                                if (decimal.TryParse(totalValue, System.Globalization.NumberStyles.Any,
+                                    System.Globalization.CultureInfo.InvariantCulture, out var txTotal))
+                                    totalTransactions += txTotal;
+                            }
                             
                             if (inPart.StartsWith("IN:"))
                             {
@@ -1281,9 +1300,9 @@ namespace CashDrawer.Server.Services
                     }
                 }
                 
-                // Expected = BOD + IN + OUT (OUT is negative for refunds/petty cash)
+                // Expected = BOD + sum of transaction Totals (not IN+OUT, which double-counts change)
                 // Note: Don't subtract SafeDrops here - client's EODCountForm does that
-                var expectedTotal = bodFloat + totalIn + totalOut;
+                var expectedTotal = bodFloat + totalTransactions;
                 
                 // Get breakdown by server (for multi-server environments)
                 var serverBreakdown = new Dictionary<string, object>();
