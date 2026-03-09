@@ -189,27 +189,47 @@ Hardcoding bypasses this and means both locations need code changes to update th
 ## Build & Deploy
 
 ```cmd
+set PATH=%PATH%;C:\Program Files\Microsoft Visual Studio\18\Community\Common7\IDE\CommonExtensions\Microsoft\TeamFoundation\Team Explorer\Git\cmd
 cd C:\cashappv3\CashDrawerCS
-git pull
-dotnet build -c Release
-```
-
-Installer (WiX):
-```cmd
+git fetch origin
+git reset --hard origin/main
 cd Installer
-dotnet build -c Release
+build.bat
 ```
 
-The built server executable ends up in:
-`CashDrawer.Server\bin\Release\net8.0-windows\`
+Output: `Installer\Output\CashDrawerSetup.msi`
 
-**Before committing:** bump version in:
-- `CashDrawer.Server/Properties/AssemblyInfo.cs` (or wherever version constant is defined)
-- Any version string displayed in the client UI
+Deploy to store PCs:
+```cmd
+msiexec /i CashDrawerSetup.msi
+```
 
-Commit pattern:
+**BEFORE EVERY COMMIT — bump version in all three places:**
+
+| File | Field |
+|---|---|
+| `Installer/Product.wxs` | `<?define ProductVersion = "3.10.XX.0" ?>` |
+| `CashDrawer.Client/CashDrawer.Client.csproj` | `<Version>3.10.XX</Version>` |
+| `CashDrawer.Server/CashDrawer.Server.csproj` | `<Version>3.10.XX</Version>` |
+
+Failing to bump the version means Windows Installer won't upgrade existing installs — it will silently skip file replacement.
+
+Commit pattern (after Claude pushes code changes directly via API):
+```cmd
+git fetch origin
+git reset --hard origin/main
+cd Installer
+build.bat
+```
+
+To push local changes:
 ```cmd
 git add -A
 git commit -m "v3.10.XX - Description of change"
-git push
+git push --set-upstream origin main
+```
+
+Git PATH (required in each new cmd session):
+```cmd
+set PATH=%PATH%;C:\Program Files\Microsoft Visual Studio\18\Community\Common7\IDE\CommonExtensions\Microsoft\TeamFoundation\Team Explorer\Git\cmd
 ```
