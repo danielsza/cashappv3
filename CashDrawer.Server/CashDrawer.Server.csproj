@@ -8,7 +8,7 @@
     <UseWindowsForms>true</UseWindowsForms>
     <AssemblyName>CashDrawer.Server</AssemblyName>
     <RootNamespace>CashDrawer.Server</RootNamespace>
-    <Version>3.0.0</Version>
+    <Version>3.10.29</Version>
     <Authors>Cash Drawer System</Authors>
     <Product>Cash Drawer Server</Product>
     <Description>Cash Drawer Server - Native Windows Application</Description>
