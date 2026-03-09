@@ -156,6 +156,7 @@ namespace CashDrawer.Client
                 Width = 300
             };
             _docNumberText.KeyDown += TextBox_KeyDown;
+            _docNumberText.Enter += (s, e) => _docNumberText.SelectAll();
 
             // Total
             var totalLabel = new Label
@@ -172,6 +173,7 @@ namespace CashDrawer.Client
             };
             _totalText.TextChanged += CalculateOut;
             _totalText.KeyDown += TextBox_KeyDown;
+            _totalText.Enter += (s, e) => _totalText.SelectAll();
 
             // IN
             var inLabel = new Label
@@ -188,6 +190,7 @@ namespace CashDrawer.Client
             };
             _inText.TextChanged += CalculateOut;
             _inText.KeyDown += TextBox_KeyDown;
+            _inText.Enter += (s, e) => _inText.SelectAll();
 
             // OUT (auto-calculated, read-only)
             var outLabel = new Label
