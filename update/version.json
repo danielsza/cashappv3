@@ -1,7 +1,7 @@
 {
   "version": "3.11.0",
-  "url": "https://github.com/danielsza/cashappv3/releases/download/v3.11.0/CashDrawerSetup.exe",
+  "url": "https://github.com/danielsza/cashappv3/releases/download/v3.11.0/CashDrawerSetup.msi",
   "notes": "Single-instance enforcement, automatic server failover + rescan, log/tally corruption fixes, and self-service password change.",
   "mandatory": false,
-  "sha256": ""
+  "sha256": "b9722c50d939675b78b1569b650df35a2c3e58f9dbfb607f6e14704eae0aebff"
 }
