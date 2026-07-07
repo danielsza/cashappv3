@@ -17,7 +17,7 @@ namespace CashDrawer.Server
         {
             Console.WriteLine("=" + new string('=', 58));
             Console.WriteLine("Cash Drawer Server - C# Native Version");
-            Console.WriteLine("Version 3.11.1");
+            Console.WriteLine("Version 3.11.2");
             Console.WriteLine("=" + new string('=', 58));
             Console.WriteLine();
 

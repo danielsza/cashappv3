@@ -1,7 +1,7 @@
 {
-  "version": "3.11.1",
-  "url": "https://github.com/danielsza/cashappv3/releases/download/v3.11.1/CashDrawerSetup.msi",
-  "notes": "Dialog layout fixes (Change Password + Client Settings buttons no longer clipped), log viewer search now filters as you type, no more 'already running' popup, and a Check-for-Updates button + version display in Settings.",
+  "version": "3.11.2",
+  "url": "https://github.com/danielsza/cashappv3/releases/download/v3.11.2/CashDrawerSetup.msi",
+  "notes": "NetworkAdmin now shows its real version (About tab + title). Includes 3.11.1: dialog sizing fixes, instant client-side log search, silent single-instance, and a Check-for-Updates button.",
   "mandatory": false,
-  "sha256": "8c054d40ff3bb16ccb1dfa96d14f4ee6b702944540a6f1cabe8b50b64ae82041"
+  "sha256": "46600edf00a02069f9a702b09231aec0aba14445e574c21a194ad14c3fbf2a2c"
 }

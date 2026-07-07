@@ -6,9 +6,13 @@ namespace CashDrawer.NetworkAdmin
 {
     public partial class MainForm
     {
+        // Admin tool's own version (shown in the title; server version appended on connect).
+        internal static string AdminVersion =>
+            (System.Reflection.Assembly.GetExecutingAssembly().GetName().Version ?? new Version(0, 0)).ToString();
+
         private void InitializeComponent()
         {
-            this.Text = "Cash Drawer - Network Administration";
+            this.Text = $"Cash Drawer - Network Administration  —  v{AdminVersion}";
             this.Size = new Size(1400, 800);
             this.StartPosition = FormStartPosition.CenterScreen;
 

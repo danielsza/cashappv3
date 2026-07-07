@@ -6,6 +6,7 @@
     <Nullable>enable</Nullable>
     <AssemblyName>CashDrawer.NetworkAdmin</AssemblyName>
     <RootNamespace>CashDrawer.NetworkAdmin</RootNamespace>
+    <Version>3.11.2</Version>
   </PropertyGroup>
 
   <ItemGroup>

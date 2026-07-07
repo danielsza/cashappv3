@@ -132,8 +132,8 @@ namespace CashDrawer.NetworkAdmin
             
             var aboutText = new Label
             {
-                Text = @"Cash Drawer - Network Administration Tool
-Version 3.0
+                Text = $@"Cash Drawer - Network Administration Tool
+Version {AdminVersion}
 
 Features:
 • Auto-discover servers on network
