@@ -187,7 +187,13 @@ namespace CashDrawer.Client
                     };
                 }
 
-                Process.Start(psi);
+                var installer = Process.Start(psi);
+
+                // After the installer finishes, relaunch the client so the user isn't
+                // left with no running app (the installer replaced the exe while we
+                // were closed). A detached helper waits for the installer to exit,
+                // then starts the upgraded client.
+                TryScheduleRelaunch(installer);
 
                 // Close the app so the installer can replace the running executable.
                 Application.Exit();
@@ -196,6 +202,41 @@ namespace CashDrawer.Client
             {
                 MessageBox.Show(owner, $"Failed to launch the installer:\n{ex.Message}",
                     "Update Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        /// <summary>
+        /// Spawn a detached helper that waits for the installer process to exit and
+        /// then relaunches this client executable. Best-effort: any failure is ignored
+        /// (worst case the user starts the app manually, as before).
+        /// </summary>
+        private static void TryScheduleRelaunch(Process? installer)
+        {
+            try
+            {
+                var exePath = Environment.ProcessPath; // upgraded exe lives at the same path
+                if (installer == null || string.IsNullOrWhiteSpace(exePath))
+                    return;
+
+                // Escape single quotes for the PowerShell single-quoted string.
+                var safePath = exePath.Replace("'", "''");
+                var command =
+                    $"Wait-Process -Id {installer.Id} -ErrorAction SilentlyContinue; " +
+                    "Start-Sleep -Seconds 2; " +
+                    $"Start-Process -FilePath '{safePath}'";
+
+                var waiter = new ProcessStartInfo
+                {
+                    FileName = "powershell.exe",
+                    Arguments = $"-NoProfile -WindowStyle Hidden -Command \"{command}\"",
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                };
+                Process.Start(waiter);
+            }
+            catch
+            {
+                // Relaunch is a convenience, never fatal.
             }
         }
 

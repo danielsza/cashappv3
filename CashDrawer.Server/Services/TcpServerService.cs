@@ -230,6 +230,9 @@ namespace CashDrawer.Server.Services
                     "get_bod_float" => HandleGetBodFloat(request),
                     "record_safe_drop" => HandleRecordSafeDrop(request),
 
+                    // Version reporting (client Settings + admin tool display it)
+                    "get_version" => HandleGetVersion(request),
+
                     _ => new ServerResponse
                     {
                         Status = "error",
@@ -995,6 +998,12 @@ namespace CashDrawer.Server.Services
                 return true;
 
             return false;
+        }
+
+        private ServerResponse HandleGetVersion(ServerRequest request)
+        {
+            var v = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version;
+            return new ServerResponse { Status = "success", Data = v?.ToString() ?? "unknown" };
         }
 
         private ServerResponse HandleGetTransactionLogs(ServerRequest request)

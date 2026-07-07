@@ -70,12 +70,40 @@ namespace CashDrawer.NetworkAdmin
                 
                 // Authentication successful - load server data
                 await LoadServerDataAsync();
+
+                // Show the connected server's version in the title (best-effort).
+                await ShowServerVersionAsync();
             }
             catch (Exception ex)
             {
                 MessageBox.Show($"Error connecting to server:\n{ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 _selectedServer = null;
                 _serversList.SelectedIndex = -1;
+            }
+        }
+
+        /// <summary>
+        /// Query the connected server's version (get_version) and append it to the
+        /// window title, e.g. "… — v3.11.3  •  SERVER1 v3.11.3". Older servers that
+        /// don't implement get_version simply leave the title unchanged.
+        /// </summary>
+        private async Task ShowServerVersionAsync()
+        {
+            var baseTitle = $"Cash Drawer - Network Administration  —  v{AdminVersion}";
+            if (_selectedServer == null) { this.Text = baseTitle; return; }
+            try
+            {
+                var resp = await SendCommandAsync(_selectedServer, new ServerRequest { Command = "get_version" });
+                string? ver = resp?.Status == "success" && resp.Data != null
+                    ? (resp.Data is JsonElement je ? je.GetString() : resp.Data.ToString())
+                    : null;
+                this.Text = string.IsNullOrWhiteSpace(ver)
+                    ? baseTitle
+                    : $"{baseTitle}  •  {_selectedServer.ServerID} v{ver}";
+            }
+            catch
+            {
+                this.Text = baseTitle;
             }
         }
         

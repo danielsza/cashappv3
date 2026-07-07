@@ -4,6 +4,7 @@ using System.Windows.Forms;
 using System.IO;
 using System.Text.Json;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 using CashDrawer.Shared.Models;
 
 namespace CashDrawer.Client
@@ -355,7 +356,15 @@ namespace CashDrawer.Client
             var versionLabel = new Label
             {
                 Text = $"Client v{UpdateService.CurrentVersion}",
-                Location = new Point(20, 27),
+                Location = new Point(20, 8),
+                AutoSize = true,
+                ForeColor = Color.Gray,
+                Font = new Font("Segoe UI", 9)
+            };
+            var serverVersionLabel = new Label
+            {
+                Text = "Server v…",
+                Location = new Point(20, 28),
                 AutoSize = true,
                 ForeColor = Color.Gray,
                 Font = new Font("Segoe UI", 9)
@@ -375,7 +384,11 @@ namespace CashDrawer.Client
                 finally { checkUpdatesButton.Enabled = true; }
             };
             buttonPanel.Controls.Add(versionLabel);
+            buttonPanel.Controls.Add(serverVersionLabel);
             buttonPanel.Controls.Add(checkUpdatesButton);
+
+            // Fill in the connected server's version in the background (best-effort).
+            LoadServerVersionAsync(serverVersionLabel);
 
             // Add in correct order: bottom panel first, then main panel fills rest
             this.Controls.Add(buttonPanel);
@@ -399,6 +412,33 @@ namespace CashDrawer.Client
             }
             catch { /* fall back to the default manifest URL */ }
             return "";
+        }
+
+        // Query the configured server's version (get_version) and show it next to the
+        // client version. Best-effort: unreachable or older servers just leave "Server v…".
+        private async void LoadServerVersionAsync(Label label)
+        {
+            try
+            {
+                ConnectionSettings? cfg = File.Exists(_configFile)
+                    ? JsonSerializer.Deserialize<ConnectionSettings>(File.ReadAllText(_configFile))
+                    : null;
+                if (cfg == null || string.IsNullOrWhiteSpace(cfg.ServerHost)) { label.Text = ""; return; }
+
+                using var client = new NetworkClient();
+                await Task.Run(() => client.Connect(cfg.ServerHost, cfg.ServerPort, 3000));
+                var resp = await client.SendRequestAsync(new ServerRequest { Command = "get_version" });
+
+                string? ver = resp?.Status == "success" && resp.Data != null
+                    ? (resp.Data is JsonElement je ? je.GetString() : resp.Data.ToString())
+                    : null;
+
+                label.Text = string.IsNullOrWhiteSpace(ver) ? "" : $"Server v{ver}";
+            }
+            catch
+            {
+                label.Text = ""; // server unreachable or too old to report a version
+            }
         }
 
         private void LoadSettings()

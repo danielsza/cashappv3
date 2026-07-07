@@ -8,7 +8,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>CashDrawer.Client</AssemblyName>
     <RootNamespace>CashDrawer.Client</RootNamespace>
-    <Version>3.11.2</Version>
+    <Version>3.11.3</Version>
   </PropertyGroup>
 
   <ItemGroup>
