@@ -29,6 +29,16 @@ namespace CashDrawer.Client
         private System.Windows.Forms.Timer? _notificationTimer;
         private DateTime _lastNotificationCheck = DateTime.Now;
 
+        // Connection health / auto-failover
+        private System.Windows.Forms.Timer? _connectionMonitorTimer;
+        private volatile bool _reconnecting = false;
+
+        // Overnight guard: cash totals are tracked per calendar day, so leaving
+        // the client open past midnight can split a shift across two daily log
+        // files. Warn the cashier once when that happens.
+        private DateTime _appStartDate = DateTime.Today;
+        private bool _midnightWarned = false;
+
         // UI Controls
         private Label _statusLabel = null!;
         private Label _serverLabel = null!;
@@ -47,6 +57,7 @@ namespace CashDrawer.Client
         private Button _openButton = null!;
         private Label _lastActionLabel = null!;
         private Button _settingsButton = null!;
+        private Button _changePasswordButton = null!;
 
         public MainForm()
         {
@@ -60,6 +71,8 @@ namespace CashDrawer.Client
             // Cleanup
             _notificationTimer?.Stop();
             _notificationTimer?.Dispose();
+            _connectionMonitorTimer?.Stop();
+            _connectionMonitorTimer?.Dispose();
             _networkClient?.Dispose();
         }
 
@@ -270,7 +283,58 @@ namespace CashDrawer.Client
             _settingsButton.Click += SettingsButton_Click;
             contentPanel.Controls.Add(_settingsButton);
 
+            // Change Password button (to the left of Settings)
+            _changePasswordButton = new Button
+            {
+                Text = "🔑 Change Password",
+                Location = new Point(215, yPos + 50),
+                Size = new Size(150, 30),
+                BackColor = Color.White,
+                FlatStyle = FlatStyle.Flat
+            };
+            _changePasswordButton.Click += ChangePasswordButton_Click;
+            contentPanel.Controls.Add(_changePasswordButton);
+
             this.Controls.Add(contentPanel);
+        }
+
+        private async void ChangePasswordButton_Click(object? sender, EventArgs e)
+        {
+            using var dialog = new ChangePasswordDialog();
+            if (dialog.ShowDialog(this) != DialogResult.OK)
+                return;
+
+            try
+            {
+                var request = new ServerRequest
+                {
+                    Command = "change_own_password",
+                    Username = dialog.Username,
+                    Password = dialog.CurrentPassword,
+                    NewPassword = dialog.NewPassword
+                };
+
+                var response = await SendWithFailoverAsync(request);
+
+                if (response != null && response.Status == "success")
+                {
+                    MessageBox.Show(this,
+                        "Your password has been changed successfully.",
+                        "Password Changed", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+                else
+                {
+                    MessageBox.Show(this,
+                        response?.Message ?? "Failed to change password.",
+                        "Change Password", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this,
+                    $"Could not change password:\n{ex.Message}",
+                    "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
         }
 
         private void EnableNotificationsCheck_CheckedChanged(object? sender, EventArgs e)
@@ -508,6 +572,210 @@ namespace CashDrawer.Client
             {
                 MessageBox.Show($"Failed to initialize client: {ex.Message}", "Error",
                     MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+
+            // Always-on monitor: watches for connection loss (auto-failover /
+            // rescan) and for the app being left open past midnight.
+            StartConnectionMonitor();
+
+            // Fire-and-forget update check (never blocks the cashier).
+            try
+            {
+                var s = LoadClientSettings();
+                _ = UpdateService.CheckAndPromptAsync(this, s?.UpdateManifestUrl);
+            }
+            catch { /* update check must never break startup */ }
+        }
+
+        private void StartConnectionMonitor()
+        {
+            if (_connectionMonitorTimer == null)
+            {
+                _connectionMonitorTimer = new System.Windows.Forms.Timer();
+                _connectionMonitorTimer.Interval = 15000; // every 15s
+                _connectionMonitorTimer.Tick += async (s, e) => await ConnectionMonitorTick();
+            }
+            _connectionMonitorTimer.Start();
+        }
+
+        private async Task ConnectionMonitorTick()
+        {
+            // 1) Overnight guard
+            CheckMidnightRollover();
+
+            // 2) Connection health - if we've dropped, try to recover in the
+            //    background (primary -> backup -> rediscover on IP change).
+            if (_reconnecting) return;
+            if (_networkClient != null && _networkClient.IsConnected) return;
+
+            await TryReconnectAsync(announce: true);
+        }
+
+        private void CheckMidnightRollover()
+        {
+            if (_midnightWarned) return;
+            if (DateTime.Today == _appStartDate) return;
+
+            _midnightWarned = true;
+            MessageBox.Show(this,
+                $"This client has been open since {_appStartDate:dddd, MMM d}.\n\n" +
+                "End-of-Day now correctly totals a shift that runs past midnight, " +
+                "but it's still good practice to complete EOD and reopen the client " +
+                "before starting a new day.",
+                "New Day Detected",
+                MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+
+        /// <summary>
+        /// Send a request, automatically recovering from a dropped/moved server:
+        /// try the live connection, then primary, then backup, then a fresh UDP
+        /// discovery (which finds a server that has come back on a new IP).
+        /// </summary>
+        private async Task<ServerResponse> SendWithFailoverAsync(ServerRequest request)
+        {
+            if (_networkClient != null && _networkClient.IsConnected)
+            {
+                try
+                {
+                    return await _networkClient.SendRequestAsync(request);
+                }
+                catch
+                {
+                    // Connection went away mid-request - fall through to recovery.
+                }
+            }
+
+            if (await TryReconnectAsync(announce: true))
+            {
+                return await _networkClient!.SendRequestAsync(request);
+            }
+
+            throw new Exception("No server reachable. Primary, backup, and network scan all failed.");
+        }
+
+        /// <summary>
+        /// Attempt to (re)establish a connection: primary -> backup -> rediscover.
+        /// Returns true if connected. Safe to call repeatedly; guarded so only one
+        /// attempt runs at a time.
+        /// </summary>
+        private async Task<bool> TryReconnectAsync(bool announce)
+        {
+            if (_reconnecting) return false;
+            _reconnecting = true;
+            try
+            {
+                var settings = LoadClientSettings();
+
+                // 1) Primary (saved) server
+                if (settings != null && !string.IsNullOrWhiteSpace(settings.ServerHost))
+                {
+                    if (announce) SetStatus("● Reconnecting to primary...", Color.Orange, null);
+                    if (TryConnectTo(settings.ServerHost, settings.ServerPort, "PRIMARY", settings.ServerHost))
+                        return true;
+                }
+
+                // 2) Backup server (if configured)
+                if (settings?.BackupEnabled == true && !string.IsNullOrWhiteSpace(settings.BackupHost))
+                {
+                    if (announce) SetStatus("● Failover to backup...", Color.Orange, null);
+                    if (TryConnectTo(settings.BackupHost, settings.BackupPort, "BACKUP", settings.BackupHost))
+                        return true;
+                }
+
+                // 3) Rediscover on the network - handles a server that has come
+                //    back online on a different IP address.
+                if (announce) SetStatus("● Scanning for servers...", Color.Orange, null);
+                try
+                {
+                    using var disco = new NetworkClient();
+                    var servers = await disco.DiscoverServersAsync();
+                    foreach (var srv in servers)
+                    {
+                        if (TryConnectTo(srv.Host, srv.Port, "DISCOVERED", $"{srv.ServerID} ({srv.Host})"))
+                        {
+                            // Persist the new address so the next launch finds it fast.
+                            SavePrimaryServer(srv.Host, srv.Port);
+                            return true;
+                        }
+                    }
+                }
+                catch
+                {
+                    // Discovery failed - fall through to the disconnected state.
+                }
+
+                if (announce)
+                {
+                    SetStatus("● Disconnected - retrying...", Color.Red, "No server found. Will keep trying.");
+                    if (_openButton != null) _openButton.Enabled = false;
+                }
+                return false;
+            }
+            finally
+            {
+                _reconnecting = false;
+            }
+        }
+
+        private bool TryConnectTo(string host, int port, string tag, string display)
+        {
+            try
+            {
+                _networkClient?.Dispose();
+                _networkClient = new NetworkClient();
+                _networkClient.Connect(host, port);
+                _connectedServerID = tag;
+                SetStatus($"● Connected ({tag})",
+                    tag == "PRIMARY" ? Color.Green : Color.DarkOrange,
+                    $"Server: {display}");
+                if (_openButton != null) _openButton.Enabled = true;
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private void SetStatus(string status, Color color, string? server)
+        {
+            void Apply()
+            {
+                _statusLabel.Text = status;
+                _statusLabel.ForeColor = color;
+                if (server != null) _serverLabel.Text = server;
+            }
+
+            if (_statusLabel.InvokeRequired) _statusLabel.Invoke((Action)Apply);
+            else Apply();
+        }
+
+        /// <summary>
+        /// Persist a server address as the primary, preserving any configured
+        /// backup and other settings.
+        /// </summary>
+        private void SavePrimaryServer(string host, int port)
+        {
+            try
+            {
+                var settings = LoadClientSettings() ?? new ConnectionSettings();
+                settings.ServerHost = host;
+                settings.ServerPort = port;
+
+                var configFile = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    "CashDrawer", "client_settings.json");
+
+                var dir = Path.GetDirectoryName(configFile);
+                if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
+                    Directory.CreateDirectory(dir);
+
+                File.WriteAllText(configFile,
+                    JsonSerializer.Serialize(settings, new JsonSerializerOptions { WriteIndented = true }));
+            }
+            catch
+            {
+                // Non-fatal: we're still connected in memory even if we can't persist.
             }
         }
 
@@ -1232,51 +1500,9 @@ namespace CashDrawer.Client
                     AmountOut = amountOut
                 };
 
-                ServerResponse? response = null;
-
-                try
-                {
-                    response = await _networkClient.SendRequestAsync(request);
-                }
-                catch (Exception ex)
-                {
-                    // Primary failed, try backup if configured
-                    var settings = LoadClientSettings();
-                    if (settings?.BackupEnabled == true 
-                        && !string.IsNullOrWhiteSpace(settings.BackupHost))
-                    {
-                        try
-                        {
-                            _statusLabel.Text = "● Failover to backup...";
-                            _statusLabel.ForeColor = Color.Orange;
-                            Application.DoEvents();
-
-                            // Try backup server
-                            _networkClient.Dispose();
-                            _networkClient = new NetworkClient();
-                            _networkClient.Connect(settings.BackupHost, settings.BackupPort);
-                            
-                            response = await _networkClient.SendRequestAsync(request);
-                            
-                            // Success! Update status
-                            _statusLabel.Text = $"● Connected to {settings.BackupHost} (BACKUP)";
-                            _statusLabel.ForeColor = Color.Orange;
-                            _serverLabel.Text = $"Server: {settings.BackupHost}:{settings.BackupPort} (BACKUP)";
-                        }
-                        catch (Exception backupEx)
-                        {
-                            // Both failed
-                            throw new Exception(
-                                $"Primary server failed: {ex.Message}\n" +
-                                $"Backup server failed: {backupEx.Message}");
-                        }
-                    }
-                    else
-                    {
-                        // No backup configured, rethrow original error
-                        throw;
-                    }
-                }
+                // Send with full auto-recovery: live connection -> primary ->
+                // backup -> network rescan (handles a server that moved IPs).
+                ServerResponse? response = await SendWithFailoverAsync(request);
 
                 if (response != null && response.Status == "success")
                 {

@@ -110,21 +110,42 @@ namespace CashDrawer.Server.Services
                 _logger.LogDebug($"Client connected: {remoteEndPoint}");
 
                 using var stream = client.GetStream();
-                var buffer = new byte[4096];
+                var buffer = new byte[8192];
 
                 while (!cancellationToken.IsCancellationRequested && client.Connected)
                 {
-                    var bytesRead = await stream.ReadAsync(buffer, cancellationToken);
-                    if (bytesRead == 0) break; // Client closed connection gracefully
+                    // Accumulate a full request. A single ReadAsync can truncate large
+                    // payloads (peer sync, logo uploads), which silently broke sync and
+                    // could corrupt data - keep reading until the JSON parses.
+                    using var ms = new MemoryStream();
+                    ServerRequest? request = null;
+                    bool connectionClosed = false;
 
-                    var json = Encoding.UTF8.GetString(buffer, 0, bytesRead);
-                    var request = JsonSerializer.Deserialize<ServerRequest>(json);
+                    while (true)
+                    {
+                        var bytesRead = await stream.ReadAsync(buffer, cancellationToken);
+                        if (bytesRead == 0) { connectionClosed = true; break; } // client closed
+
+                        ms.Write(buffer, 0, bytesRead);
+                        var json = Encoding.UTF8.GetString(ms.GetBuffer(), 0, (int)ms.Length);
+                        try
+                        {
+                            request = JsonSerializer.Deserialize<ServerRequest>(json);
+                            break; // parsed a complete request
+                        }
+                        catch (JsonException)
+                        {
+                            // Partial request - keep reading.
+                        }
+                    }
+
+                    if (connectionClosed) break; // Client closed connection gracefully
 
                     if (request != null)
                     {
                         // Set client IP from connection (security: don't trust client-provided IP)
                         request.ClientIP = clientIP;
-                        
+
                         var response = ProcessRequest(request);
                         var responseJson = JsonSerializer.Serialize(response);
                         var responseBytes = Encoding.UTF8.GetBytes(responseJson);
@@ -183,6 +204,7 @@ namespace CashDrawer.Server.Services
                     "update_user" => HandleUpdateUser(request),
                     "delete_user" => HandleDeleteUser(request),
                     "reset_password" => HandleResetPassword(request),
+                    "change_own_password" => HandleChangeOwnPassword(request),
                     "test_relay" => HandleTestRelay(request),
                     
                     // Petty cash config commands
@@ -677,6 +699,62 @@ namespace CashDrawer.Server.Services
             }
         }
 
+        /// <summary>
+        /// Let a user change their OWN password: verify the current password,
+        /// then set the new one. Unlike reset_password (admin-only) this requires
+        /// the caller to prove they know the existing password. The updated
+        /// LastModified timestamp lets peer sync propagate the change to other servers.
+        /// </summary>
+        private ServerResponse HandleChangeOwnPassword(ServerRequest request)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(request.Username)
+                    || string.IsNullOrEmpty(request.Password)
+                    || string.IsNullOrEmpty(request.NewPassword))
+                {
+                    return new ServerResponse { Status = "error", Message = "Username, current password, and new password are required" };
+                }
+
+                if (request.NewPassword.Length < 4)
+                {
+                    return new ServerResponse { Status = "error", Message = "New password must be at least 4 characters" };
+                }
+
+                if (request.NewPassword == request.Password)
+                {
+                    return new ServerResponse { Status = "error", Message = "New password must be different from the current password" };
+                }
+
+                // Verify current credentials (this also enforces lockout rules).
+                var (success, message, user) = _userService.AuthenticateUser(request.Username, request.Password);
+                if (!success || user == null)
+                {
+                    _logger.LogWarning($"SECURITY: Failed self password-change for '{request.Username}' (bad current password)");
+                    return new ServerResponse { Status = "error", Message = message ?? "Current password is incorrect" };
+                }
+
+                user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(request.NewPassword);
+                user.FailedAttempts = 0;
+                user.LockedUntil = null;
+                user.LastModified = DateTime.Now;
+
+                _userService.SaveUsers();
+                _logger.LogInformation($"User '{request.Username}' changed their own password");
+
+                return new ServerResponse
+                {
+                    Status = "success",
+                    Message = "Password changed successfully"
+                };
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error changing own password");
+                return new ServerResponse { Status = "error", Message = ex.Message };
+            }
+        }
+
         private ServerResponse HandleTestRelay(ServerRequest request)
         {
             try
@@ -897,6 +975,28 @@ namespace CashDrawer.Server.Services
             }
         }
         
+        /// <summary>
+        /// Extract the timestamp from a log line regardless of format.
+        /// Transaction lines lead with the TransactionId then the timestamp in the
+        /// second pipe-column; error/older lines lead with the timestamp.
+        /// </summary>
+        private static bool TryParseLogLineDate(string line, out DateTime date)
+        {
+            date = default;
+            if (string.IsNullOrWhiteSpace(line)) return false;
+
+            // Timestamp-first (old transaction lines and error lines)
+            if (line.Length >= 19 && DateTime.TryParse(line.Substring(0, 19), out date))
+                return true;
+
+            // Id-first (new transaction lines): timestamp is the 2nd column
+            var parts = line.Split('|');
+            if (parts.Length > 1 && DateTime.TryParse(parts[1].Trim(), out date))
+                return true;
+
+            return false;
+        }
+
         private ServerResponse HandleGetTransactionLogs(ServerRequest request)
         {
             try
@@ -942,8 +1042,10 @@ namespace CashDrawer.Server.Services
                     {
                         if (string.IsNullOrWhiteSpace(line)) continue;
                         
-                        // Parse log entry date (format: 2026-01-28 08:49:27 | ...)
-                        if (line.Length >= 19 && DateTime.TryParse(line.Substring(0, 19), out var logDate))
+                        // Parse the entry date. New transaction format leads with the
+                        // TransactionId ("ID | 2026-01-28 08:49:27 | ..."), older lines
+                        // and error lines lead with the timestamp - handle both.
+                        if (TryParseLogLineDate(line, out var logDate))
                         {
                             // Filter by date range
                             if (logDate < startDate.Date || logDate > endDate.Date.AddDays(1))
@@ -1019,8 +1121,10 @@ namespace CashDrawer.Server.Services
                     {
                         if (string.IsNullOrWhiteSpace(line)) continue;
                         
-                        // Parse log entry date (format: 2026-01-28 08:49:27 | ...)
-                        if (line.Length >= 19 && DateTime.TryParse(line.Substring(0, 19), out var logDate))
+                        // Parse the entry date. New transaction format leads with the
+                        // TransactionId ("ID | 2026-01-28 08:49:27 | ..."), older lines
+                        // and error lines lead with the timestamp - handle both.
+                        if (TryParseLogLineDate(line, out var logDate))
                         {
                             // Filter by date range
                             if (logDate < startDate.Date || logDate > endDate.Date.AddDays(1))
@@ -1173,209 +1277,147 @@ namespace CashDrawer.Server.Services
             Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
             "CashDrawer", "safe_drops.json");
 
+        /// <summary>
+        /// Parse a transaction log line into a DaySummaryLine, tolerating both the
+        /// new (TransactionId-first) and old (timestamp-first) formats. Returns null
+        /// for lines that aren't usable transaction rows.
+        /// </summary>
+        private static CashDrawer.Shared.Utils.DaySummaryLine? ParseSummaryLine(string line)
+        {
+            if (string.IsNullOrWhiteSpace(line)) return null;
+            var parts = line.Split('|');
+
+            string ts, serverID, docType, totalP, inP, outP;
+            if (parts.Length >= 10)
+            {
+                // New: Id | ts | server | user | reason | docType | docNo | Total: | IN: | OUT:
+                ts = parts[1].Trim(); serverID = parts[2].Trim(); docType = parts[5].Trim();
+                totalP = parts[7].Trim(); inP = parts[8].Trim(); outP = parts[9].Trim();
+            }
+            else if (parts.Length >= 9)
+            {
+                // Old (no TransactionId): ts | server | user | reason | docType | docNo | Total: | IN: | OUT:
+                ts = parts[0].Trim(); serverID = parts[1].Trim(); docType = parts[4].Trim();
+                totalP = parts[6].Trim(); inP = parts[7].Trim(); outP = parts[8].Trim();
+            }
+            else
+            {
+                return null;
+            }
+
+            if (!DateTime.TryParse(ts, out var timestamp)) return null;
+
+            decimal total = 0, amtIn = 0, amtOut = 0;
+            var inv = System.Globalization.CultureInfo.InvariantCulture;
+            var any = System.Globalization.NumberStyles.Any;
+            if (totalP.StartsWith("Total:")) decimal.TryParse(totalP.Substring(6).Trim(), any, inv, out total);
+            if (inP.StartsWith("IN:")) decimal.TryParse(inP.Substring(3).Trim(), any, inv, out amtIn);
+            if (outP.StartsWith("OUT:")) decimal.TryParse(outP.Substring(4).Trim(), any, inv, out amtOut);
+
+            return new CashDrawer.Shared.Utils.DaySummaryLine
+            {
+                Timestamp = timestamp,
+                ServerID = serverID,
+                DocumentType = docType,
+                Total = total,
+                AmountIn = amtIn,
+                AmountOut = amtOut
+            };
+        }
+
         private ServerResponse HandleGetDaySummary(ServerRequest request)
         {
             try
             {
                 var today = DateTime.Today;
-                
-                // Get BOD float for today
-                decimal bodFloat = 0;
+
+                // Load configured BOD floats (keyed by business date yyyy-MM-dd).
+                Dictionary<string, decimal> bodData = new();
                 if (File.Exists(_bodFloatFile))
                 {
-                    var bodData = JsonSerializer.Deserialize<Dictionary<string, decimal>>(File.ReadAllText(_bodFloatFile));
-                    bodData?.TryGetValue(today.ToString("yyyy-MM-dd"), out bodFloat);
+                    try
+                    {
+                        bodData = JsonSerializer.Deserialize<Dictionary<string, decimal>>(File.ReadAllText(_bodFloatFile)) ?? new();
+                    }
+                    catch { bodData = new(); }
                 }
-                
-                // Get safe drops for today
+
+                // Read lines from BOTH yesterday and today so a shift that opens
+                // before midnight and closes after it is treated as one session.
+                var logDir = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+                    "CashDrawer", "Logs");
+
+                // Read today plus yesterday. Cash is removed nightly, so the summary
+                // is per-day (the calculator scopes to the most recent BOD's date);
+                // yesterday is included only so an EOD run shortly after midnight can
+                // still find that day's BOD. The float is taken from the BOD entry for
+                // the business date, which fixes the old "short the BOD balance" bug
+                // where the float was looked up by today's (wrong) date.
+                var summaryLines = new List<CashDrawer.Shared.Utils.DaySummaryLine>();
+                foreach (var date in new[] { today.AddDays(-1), today })
+                {
+                    var f = Path.Combine(logDir, $"CashDrawer_{date:yyyy-MM-dd}.log");
+                    if (!File.Exists(f)) continue;
+                    foreach (var line in ReadAllLinesShared(f))
+                    {
+                        var parsed = ParseSummaryLine(line);
+                        if (parsed != null) summaryLines.Add(parsed);
+                    }
+                }
+
+                // Compute the summary for the current business session (from the
+                // most recent BOD forward).
+                var summary = CashDrawer.Shared.Utils.DaySummaryCalculator.Compute(
+                    summaryLines,
+                    d => bodData.TryGetValue(d, out var f) ? f : (decimal?)null,
+                    today);
+
+                var bodFloat = summary.BodFloat;
+                var totalIn = summary.TotalIn;
+                var totalOut = summary.TotalOut;
+                var totalTransactions = summary.TotalTransactions;
+                var transactionCount = summary.TransactionCount;
+
+                // Expected = BOD + sum of transaction Totals (not IN+OUT, which double-counts change)
+                // Note: Don't subtract SafeDrops here - client's EODCountForm does that
+                var expectedTotal = summary.ExpectedTotal;
+
+                // Safe drops belonging to this session (from session start onward).
                 var safeDrops = new List<object>();
                 decimal totalSafeDrops = 0;
                 if (File.Exists(_safeDropsFile))
                 {
-                    var allDrops = JsonSerializer.Deserialize<List<SafeDropEntry>>(File.ReadAllText(_safeDropsFile)) ?? new();
-                    var todayDrops = allDrops.Where(d => d.Timestamp.Date == today).ToList();
-                    totalSafeDrops = todayDrops.Where(d => d.Confirmed).Sum(d => d.Amount);
-                    safeDrops = todayDrops.Cast<object>().ToList();
-                }
-                
-                // Get transaction totals for today from logs
-                decimal totalIn = 0;
-                decimal totalOut = 0;
-                decimal totalTransactions = 0;
-                int transactionCount = 0;
-                
-                var logDir = Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
-                    "CashDrawer", "Logs");
-                var logFile = Path.Combine(logDir, $"CashDrawer_{today:yyyy-MM-dd}.log");
-                
-                if (File.Exists(logFile))
-                {
-                    var lines = ReadAllLinesShared(logFile);
-                    foreach (var line in lines)
+                    try
                     {
-                        // Parse log line format (new with TransactionId): 
-                        // TransactionId | 2026-01-30 11:21:43 | SERVER1 | 709 | Transaction | BOD |  | Total: 50.00 | IN: 50.00 | OUT: 0.00
-                        var parts = line.Split('|');
-                        if (parts.Length >= 10)
-                        {
-                            // New format with TransactionId
-                            var docType = parts[5].Trim();
-                            
-                            // Skip BOD/EOD from the cash flow calculation (they're not transactions)
-                            if (docType == "BOD" || docType == "EOD")
-                            {
-                                transactionCount++;
-                                continue;
-                            }
-                            
-                            // Parse "Total: 50.00", "IN: 50.00" and "OUT: -10.00" format
-                            var totalPart = parts[7].Trim(); // "Total: 50.00"
-                            var inPart = parts[8].Trim();    // "IN: 50.00"
-                            var outPart = parts[9].Trim();   // "OUT: -10.00"
-                            
-                            if (totalPart.StartsWith("Total:"))
-                            {
-                                var totalValue = totalPart.Substring(6).Trim();
-                                if (decimal.TryParse(totalValue, System.Globalization.NumberStyles.Any,
-                                    System.Globalization.CultureInfo.InvariantCulture, out var txTotal))
-                                    totalTransactions += txTotal;
-                            }
-                            
-                            if (inPart.StartsWith("IN:"))
-                            {
-                                var inValue = inPart.Substring(3).Trim();
-                                if (decimal.TryParse(inValue, out var amtIn))
-                                    totalIn += amtIn;
-                            }
-                            
-                            if (outPart.StartsWith("OUT:"))
-                            {
-                                var outValue = outPart.Substring(4).Trim();
-                                if (decimal.TryParse(outValue, out var amtOut))
-                                    totalOut += amtOut; // Keep sign (negative for refunds/petty cash)
-                            }
-                            
-                            transactionCount++;
-                        }
-                        else if (parts.Length >= 9)
-                        {
-                            // Old format without TransactionId (for backwards compatibility)
-                            var docType = parts[4].Trim();
-                            
-                            if (docType == "BOD" || docType == "EOD")
-                            {
-                                transactionCount++;
-                                continue;
-                            }
-                            
-                            var totalPartOld = parts[6].Trim(); // "Total: 50.00"
-                            var inPart = parts[7].Trim();
-                            var outPart = parts[8].Trim();
-                            
-                            if (totalPartOld.StartsWith("Total:"))
-                            {
-                                var totalValue = totalPartOld.Substring(6).Trim();
-                                if (decimal.TryParse(totalValue, System.Globalization.NumberStyles.Any,
-                                    System.Globalization.CultureInfo.InvariantCulture, out var txTotal))
-                                    totalTransactions += txTotal;
-                            }
-                            
-                            if (inPart.StartsWith("IN:"))
-                            {
-                                var inValue = inPart.Substring(3).Trim();
-                                if (decimal.TryParse(inValue, out var amtIn))
-                                    totalIn += amtIn;
-                            }
-                            
-                            if (outPart.StartsWith("OUT:"))
-                            {
-                                var outValue = outPart.Substring(4).Trim();
-                                if (decimal.TryParse(outValue, out var amtOut))
-                                    totalOut += amtOut;
-                            }
-                            
-                            transactionCount++;
-                        }
+                        var allDrops = JsonSerializer.Deserialize<List<SafeDropEntry>>(File.ReadAllText(_safeDropsFile)) ?? new();
+                        var sessionDrops = allDrops.Where(d => d.Timestamp >= summary.SessionStart).ToList();
+                        totalSafeDrops = sessionDrops.Where(d => d.Confirmed).Sum(d => d.Amount);
+                        safeDrops = sessionDrops.Cast<object>().ToList();
                     }
+                    catch { }
                 }
-                
-                // Expected = BOD + sum of transaction Totals (not IN+OUT, which double-counts change)
-                // Note: Don't subtract SafeDrops here - client's EODCountForm does that
-                var expectedTotal = bodFloat + totalTransactions;
-                
-                // Get breakdown by server (for multi-server environments)
+
+                // Per-server breakdown from the calculator.
                 var serverBreakdown = new Dictionary<string, object>();
-                if (File.Exists(logFile))
+                foreach (var kvp in summary.ServerBreakdown)
                 {
-                    var lines = ReadAllLinesShared(logFile);
-                    var serverTotals = new Dictionary<string, (decimal In, decimal Out, int Count)>();
-                    
-                    foreach (var line in lines)
-                    {
-                        var parts = line.Split('|');
-                        string serverID = "";
-                        string docType = "";
-                        decimal amtIn = 0, amtOut = 0;
-                        
-                        if (parts.Length >= 10)
-                        {
-                            serverID = parts[2].Trim();
-                            docType = parts[5].Trim();
-                            
-                            if (docType != "BOD" && docType != "EOD")
-                            {
-                                var inPart = parts[8].Trim();
-                                var outPart = parts[9].Trim();
-                                if (inPart.StartsWith("IN:"))
-                                    decimal.TryParse(inPart.Substring(3).Trim(), out amtIn);
-                                if (outPart.StartsWith("OUT:"))
-                                    decimal.TryParse(outPart.Substring(4).Trim(), out amtOut);
-                            }
-                        }
-                        else if (parts.Length >= 9)
-                        {
-                            serverID = parts[1].Trim();
-                            docType = parts[4].Trim();
-                            
-                            if (docType != "BOD" && docType != "EOD")
-                            {
-                                var inPart = parts[7].Trim();
-                                var outPart = parts[8].Trim();
-                                if (inPart.StartsWith("IN:"))
-                                    decimal.TryParse(inPart.Substring(3).Trim(), out amtIn);
-                                if (outPart.StartsWith("OUT:"))
-                                    decimal.TryParse(outPart.Substring(4).Trim(), out amtOut);
-                            }
-                        }
-                        
-                        if (!string.IsNullOrEmpty(serverID) && docType != "BOD" && docType != "EOD")
-                        {
-                            if (!serverTotals.ContainsKey(serverID))
-                                serverTotals[serverID] = (0, 0, 0);
-                            var current = serverTotals[serverID];
-                            serverTotals[serverID] = (current.In + amtIn, current.Out + amtOut, current.Count + 1);
-                        }
-                    }
-                    
-                    foreach (var kvp in serverTotals)
-                    {
-                        serverBreakdown[kvp.Key] = new { In = kvp.Value.In, Out = kvp.Value.Out, Count = kvp.Value.Count };
-                    }
+                    serverBreakdown[kvp.Key] = new { In = kvp.Value.In, Out = kvp.Value.Out, Count = kvp.Value.Count };
                 }
-                
+
                 return new ServerResponse
                 {
                     Status = "success",
                     Data = new
                     {
-                        Date = today.ToString("yyyy-MM-dd"),
+                        Date = summary.BusinessDate,
                         BodFloat = bodFloat,
                         TotalIn = totalIn,
                         TotalOut = totalOut,
                         TotalSafeDrops = totalSafeDrops,
                         ExpectedTotal = expectedTotal,
                         TransactionCount = transactionCount,
+                        BodCount = summary.BodCount,
                         SafeDrops = safeDrops,
                         ServerBreakdown = serverBreakdown
                     }

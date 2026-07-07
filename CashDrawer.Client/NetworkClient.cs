@@ -18,12 +18,26 @@ namespace CashDrawer.Client
 
         public bool IsConnected => _tcpClient?.Connected ?? false;
 
-        public void Connect(string host, int port)
+        // Default connect timeout (ms). Without this, TcpClient.Connect blocks for
+        // ~20s on an unreachable host, which would freeze failover and the UI.
+        private const int DefaultConnectTimeoutMs = 3000;
+
+        public void Connect(string host, int port) => Connect(host, port, DefaultConnectTimeoutMs);
+
+        public void Connect(string host, int port, int timeoutMs)
         {
             try
             {
                 _tcpClient = new TcpClient();
-                _tcpClient.Connect(host, port);
+
+                var connectResult = _tcpClient.BeginConnect(host, port, null, null);
+                if (!connectResult.AsyncWaitHandle.WaitOne(timeoutMs))
+                {
+                    try { _tcpClient.Close(); } catch { }
+                    throw new TimeoutException($"Connection to {host}:{port} timed out after {timeoutMs}ms");
+                }
+
+                _tcpClient.EndConnect(connectResult);
                 _stream = _tcpClient.GetStream();
                 _serverHost = host;
                 _serverPort = port;
@@ -138,12 +152,31 @@ namespace CashDrawer.Client
                 var requestBytes = Encoding.UTF8.GetBytes(requestJson);
                 await _stream!.WriteAsync(requestBytes);
 
-                // Read response
-                var buffer = new byte[4096];
-                var bytesRead = await _stream.ReadAsync(buffer);
-                var responseJson = Encoding.UTF8.GetString(buffer, 0, bytesRead);
+                // Read the full response. A single ReadAsync is NOT guaranteed to
+                // return the whole payload (large responses exceed the buffer and TCP
+                // can fragment), so accumulate until the JSON parses.
+                using var ms = new System.IO.MemoryStream();
+                var buffer = new byte[8192];
+                ServerResponse? response = null;
 
-                var response = JsonSerializer.Deserialize<ServerResponse>(responseJson);
+                while (true)
+                {
+                    var bytesRead = await _stream.ReadAsync(buffer);
+                    if (bytesRead == 0) break; // connection closed
+
+                    ms.Write(buffer, 0, bytesRead);
+                    var responseJson = Encoding.UTF8.GetString(ms.GetBuffer(), 0, (int)ms.Length);
+                    try
+                    {
+                        response = JsonSerializer.Deserialize<ServerResponse>(responseJson);
+                        break; // parsed a complete object
+                    }
+                    catch (JsonException)
+                    {
+                        // Incomplete payload - keep reading.
+                    }
+                }
+
                 return response ?? new ServerResponse { Status = "error", Message = "Invalid response" };
             }
             catch (Exception ex)

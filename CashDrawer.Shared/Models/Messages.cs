@@ -10,6 +10,7 @@ namespace CashDrawer.Shared.Models
         public string Command { get; set; } = string.Empty;
         public string? Username { get; set; }
         public string? Password { get; set; }
+        public string? NewPassword { get; set; }  // Used by change_own_password
         public string? Reason { get; set; }
         public string? DocumentType { get; set; }
         public string? DocumentNumber { get; set; }

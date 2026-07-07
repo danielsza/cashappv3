@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Sockets;
@@ -159,13 +160,9 @@ namespace CashDrawer.NetworkAdmin
             var requestBytes = Encoding.UTF8.GetBytes(requestJson);
             await stream.WriteAsync(requestBytes, 0, requestBytes.Length);
 
-            var buffer = new byte[65536];
-            var bytesRead = await stream.ReadAsync(buffer, 0, buffer.Length);
-            var responseJson = Encoding.UTF8.GetString(buffer, 0, bytesRead);
-            
-            return JsonSerializer.Deserialize<ServerResponse>(responseJson);
+            return await ReadFullResponseAsync(stream);
         }
-        
+
         /// <summary>
         /// Send command to control service (for start/stop/restart)
         /// </summary>
@@ -175,7 +172,7 @@ namespace CashDrawer.NetworkAdmin
             {
                 return new ServerResponse { Status = "error", Message = "Control service port not known" };
             }
-            
+
             using var client = new TcpClient();
             await client.ConnectAsync(server.Host, server.ControlPort);
             using var stream = client.GetStream();
@@ -184,11 +181,43 @@ namespace CashDrawer.NetworkAdmin
             var requestBytes = Encoding.UTF8.GetBytes(requestJson);
             await stream.WriteAsync(requestBytes, 0, requestBytes.Length);
 
+            return await ReadFullResponseAsync(stream);
+        }
+
+        /// <summary>
+        /// Read a complete JSON response from the stream. A single ReadAsync is NOT
+        /// guaranteed to return the whole payload - large log dumps exceed the buffer
+        /// and TCP can fragment - so we accumulate until the JSON parses. This is what
+        /// previously caused "error loading logs" when the transaction log was large.
+        /// </summary>
+        private static async Task<ServerResponse?> ReadFullResponseAsync(NetworkStream stream)
+        {
+            using var ms = new MemoryStream();
             var buffer = new byte[65536];
-            var bytesRead = await stream.ReadAsync(buffer, 0, buffer.Length);
-            var responseJson = Encoding.UTF8.GetString(buffer, 0, bytesRead);
-            
-            return JsonSerializer.Deserialize<ServerResponse>(responseJson);
+
+            while (true)
+            {
+                var bytesRead = await stream.ReadAsync(buffer, 0, buffer.Length);
+                if (bytesRead == 0) break; // stream closed
+
+                ms.Write(buffer, 0, bytesRead);
+
+                var text = Encoding.UTF8.GetString(ms.GetBuffer(), 0, (int)ms.Length);
+                try
+                {
+                    // Succeeds only once the full JSON object has arrived.
+                    return JsonSerializer.Deserialize<ServerResponse>(text);
+                }
+                catch (JsonException)
+                {
+                    // Incomplete payload - keep reading.
+                }
+            }
+
+            var finalText = Encoding.UTF8.GetString(ms.GetBuffer(), 0, (int)ms.Length);
+            return string.IsNullOrWhiteSpace(finalText)
+                ? null
+                : JsonSerializer.Deserialize<ServerResponse>(finalText);
         }
     }
 }

@@ -1,4 +1,5 @@
 using System;
+using System.Globalization;
 
 namespace CashDrawer.Shared.Models
 {
@@ -33,11 +34,31 @@ namespace CashDrawer.Shared.Models
             }
         }
         
+        /// <summary>
+        /// Strip the field delimiter and any line breaks from a free-text field so
+        /// user input (e.g. an invoice number or petty-cash reason containing "|")
+        /// can never shift the pipe-delimited columns and corrupt the log line.
+        /// </summary>
+        private static string Sanitize(string? value)
+        {
+            if (string.IsNullOrEmpty(value)) return string.Empty;
+            return value
+                .Replace('|', '/')
+                .Replace('\r', ' ')
+                .Replace('\n', ' ')
+                .Trim();
+        }
+
         public override string ToString()
         {
-            return $"{TransactionId} | {Timestamp:yyyy-MM-dd HH:mm:ss} | {ServerID} | {Username} | " +
-                   $"{Reason} | {DocumentType} | {DocumentNumber} | " +
-                   $"Total: {Total:F2} | IN: {AmountIn:F2} | OUT: {AmountOut:F2}";
+            // Money is always written with InvariantCulture so a machine whose
+            // locale uses a comma decimal separator can't write "50,00" and then
+            // fail to parse it back as invariant "50.00".
+            return $"{Sanitize(TransactionId)} | {Timestamp:yyyy-MM-dd HH:mm:ss} | {Sanitize(ServerID)} | {Sanitize(Username)} | " +
+                   $"{Sanitize(Reason)} | {Sanitize(DocumentType)} | {Sanitize(DocumentNumber)} | " +
+                   $"Total: {Total.ToString("F2", CultureInfo.InvariantCulture)} | " +
+                   $"IN: {AmountIn.ToString("F2", CultureInfo.InvariantCulture)} | " +
+                   $"OUT: {AmountOut.ToString("F2", CultureInfo.InvariantCulture)}";
         }
         
         /// <summary>
@@ -64,33 +85,33 @@ namespace CashDrawer.Shared.Models
                 if (DateTime.TryParse(parts[1].Trim(), out var ts))
                     txn.Timestamp = ts;
                 
-                // Parse Total: X.XX
+                // Parse Total: X.XX  (InvariantCulture to match how it was written)
                 var totalPart = parts[7].Trim();
                 if (totalPart.StartsWith("Total:"))
                 {
                     var val = totalPart.Substring(6).Trim();
-                    if (decimal.TryParse(val, out var total))
+                    if (decimal.TryParse(val, NumberStyles.Any, CultureInfo.InvariantCulture, out var total))
                         txn.Total = total;
                 }
-                
+
                 // Parse IN: X.XX
                 var inPart = parts[8].Trim();
                 if (inPart.StartsWith("IN:"))
                 {
                     var val = inPart.Substring(3).Trim();
-                    if (decimal.TryParse(val, out var amtIn))
+                    if (decimal.TryParse(val, NumberStyles.Any, CultureInfo.InvariantCulture, out var amtIn))
                         txn.AmountIn = amtIn;
                 }
-                
+
                 // Parse OUT: X.XX
                 var outPart = parts[9].Trim();
                 if (outPart.StartsWith("OUT:"))
                 {
                     var val = outPart.Substring(4).Trim();
-                    if (decimal.TryParse(val, out var amtOut))
+                    if (decimal.TryParse(val, NumberStyles.Any, CultureInfo.InvariantCulture, out var amtOut))
                         txn.AmountOut = amtOut;
                 }
-                
+
                 return txn;
             }
             catch

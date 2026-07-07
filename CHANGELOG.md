@@ -5,6 +5,60 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.11.0] - 2026-07-06
+
+### Added
+- **Single-instance enforcement** - The client now uses a machine-wide mutex so
+  only one instance can run per computer. A second launch surfaces the existing
+  window and exits, preventing duplicate transaction logging.
+- **Automatic failover + rescan** - All transactions now route through a single
+  recovery path: live connection → primary → backup → fresh UDP discovery. If a
+  server goes offline and returns on a **new IP address**, the client rediscovers
+  it automatically and saves the new address. A 15-second background monitor
+  reconnects even while idle.
+- **Self-service password change** - Users can change their own password from the
+  client (verifies the current password first). New server command
+  `change_own_password`; changes propagate to peer servers via sync.
+- **Full auto-update** - On startup the client checks an update manifest
+  (`update/version.json`), and if a newer version exists, downloads the installer
+  (with optional SHA-256 verification), launches it, and exits. Manifest URL is
+  overridable per-site via `client_settings.json` (`UpdateManifestUrl`).
+
+### Fixed
+- **Log/tally corruption** - Free-text fields (username, invoice #, petty-cash
+  reason) are now sanitized of the `|` delimiter and line breaks before logging,
+  so a stray `|` can no longer shift columns and corrupt a log line.
+- **Culture-safe money formatting** - Transaction amounts are written and parsed
+  with `InvariantCulture`, so a machine using a comma decimal separator can't
+  write `50,00` and then fail to parse it.
+- **Log viewer error on large logs** - The admin, client, and server all read the
+  full TCP payload now (accumulate until the JSON parses) instead of a single
+  fixed-size read. Large transaction-log dumps and large requests (peer sync,
+  logo uploads) were previously truncated, breaking JSON parsing and silently
+  failing sync.
+- **Log-viewer date filter** - Date filtering now reads the timestamp from the
+  correct column for the new `TransactionId`-first log format (previously it read
+  the ID and skipped filtering).
+- **Connect timeout** - Client connections now time out after 3s instead of
+  blocking ~20s on an unreachable host, so failover is responsive.
+
+- **EOD "short the BOD balance" fix (forgotten EOD)** - End-of-Day now takes the
+  BOD float from the BOD entry for the business day (the most recent BOD's date),
+  instead of looking the float up by *today's* calendar date. Previously, if an EOD
+  was done on a different day than the BOD (e.g. a forgotten EOD reconciled the next
+  day), the float lookup hit a date with no BOD, returned $0, and the count came up
+  short by the entire float. New reusable `DaySummaryCalculator` in Shared
+  (unit-tested). The reconciliation is **per calendar day** - this shop removes the
+  drawer cash nightly whether or not EOD was run, so each day stands alone and an
+  earlier day's sales never bleed into a later day's total.
+- **Duplicate BOD (same-day correction) safety** - If a cashier does Beginning-of-Day
+  twice on the same day, it's treated as a correction: the earliest BOD anchors the
+  start (no sales dropped) and the latest BOD supplies the float (the corrected
+  amount). Re-running End-of-Day yields the same totals. Summary returns `BodCount`
+  so a double-BOD is visible.
+- **Client overnight FYI** - One-time informational message if the client is left
+  open past midnight (cash totals are tracked per day).
+
 ## [3.10.26] - 2026-03-09
 
 ### Fixed

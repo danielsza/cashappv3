@@ -388,6 +388,19 @@ namespace CashDrawer.Client
         {
             try
             {
+                // Preserve fields that aren't editable in this dialog (e.g. a custom
+                // auto-update URL) so saving here doesn't wipe them.
+                string existingUpdateUrl = "";
+                try
+                {
+                    if (File.Exists(_configFile))
+                    {
+                        var existing = JsonSerializer.Deserialize<ConnectionSettings>(File.ReadAllText(_configFile));
+                        existingUpdateUrl = existing?.UpdateManifestUrl ?? "";
+                    }
+                }
+                catch { /* fall back to default */ }
+
                 var settings = new ConnectionSettings
                 {
                     ServerHost = ServerHost,
@@ -395,7 +408,8 @@ namespace CashDrawer.Client
                     BackupHost = BackupEnabled ? BackupHost : "",
                     BackupPort = BackupEnabled ? BackupPort : 5000,
                     BackupEnabled = BackupEnabled,
-                    LogoPath = LogoPath
+                    LogoPath = LogoPath,
+                    UpdateManifestUrl = existingUpdateUrl
                 };
 
                 var json = JsonSerializer.Serialize(settings, new JsonSerializerOptions
@@ -666,5 +680,9 @@ namespace CashDrawer.Client
         public int BackupPort { get; set; } = 5000;
         public bool BackupEnabled { get; set; } = false;
         public string LogoPath { get; set; } = "";  // Path to logo image for receipts
+
+        // Optional override for the auto-update manifest URL. When empty, the
+        // client uses UpdateService.DefaultManifestUrl.
+        public string UpdateManifestUrl { get; set; } = "";
     }
 }
