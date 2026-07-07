@@ -1,7 +1,7 @@
 {
-  "version": "3.11.0",
-  "url": "https://github.com/danielsza/cashappv3/releases/download/v3.11.0/CashDrawerSetup.msi",
-  "notes": "Single-instance enforcement, automatic server failover + rescan, log/tally corruption fixes, and self-service password change.",
+  "version": "3.11.1",
+  "url": "https://github.com/danielsza/cashappv3/releases/download/v3.11.1/CashDrawerSetup.msi",
+  "notes": "Dialog layout fixes (Change Password + Client Settings buttons no longer clipped), log viewer search now filters as you type, no more 'already running' popup, and a Check-for-Updates button + version display in Settings.",
   "mandatory": false,
-  "sha256": "b9722c50d939675b78b1569b650df35a2c3e58f9dbfb607f6e14704eae0aebff"
+  "sha256": "8c054d40ff3bb16ccb1dfa96d14f4ee6b702944540a6f1cabe8b50b64ae82041"
 }

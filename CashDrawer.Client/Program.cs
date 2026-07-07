@@ -30,18 +30,10 @@ namespace CashDrawer.Client
 
             if (!createdNew)
             {
-                // Another instance already owns the mutex. Try to surface the
-                // existing window, tell the user, and exit without starting a
-                // second client (prevents duplicate logging / tally corruption).
+                // Another instance already owns the mutex. Silently surface the
+                // existing window and exit without starting a second client
+                // (prevents duplicate logging / tally corruption) — no popup.
                 TryFocusExistingInstance();
-
-                MessageBox.Show(
-                    "CashDrawer Client is already running on this computer.\n\n" +
-                    "Only one instance can run at a time. The existing window has " +
-                    "been brought to the front.",
-                    "Already Running",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Information);
                 return;
             }
 

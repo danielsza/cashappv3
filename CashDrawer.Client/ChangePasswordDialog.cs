@@ -30,7 +30,10 @@ namespace CashDrawer.Client
         private void InitializeComponent()
         {
             this.Text = "Change Password";
-            this.Size = new Size(380, 280);
+            // Size the CLIENT area (not the outer window) so the buttons at y=220-250
+            // aren't clipped by the title bar/border — Size includes chrome, ClientSize
+            // doesn't. Client height 265 leaves room below the 30px-tall buttons.
+            this.ClientSize = new Size(360, 265);
             this.StartPosition = FormStartPosition.CenterParent;
             this.FormBorderStyle = FormBorderStyle.FixedDialog;
             this.MaximizeBox = false;

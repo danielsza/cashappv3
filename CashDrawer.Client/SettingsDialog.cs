@@ -46,10 +46,13 @@ namespace CashDrawer.Client
         private void InitializeComponent()
         {
             this.Text = "Client Settings";
-            this.Size = new Size(900, 750);
+            // Size the CLIENT area, not the outer window: with Size=900 the client was
+            // only ~884px, clipping the Cancel button whose right edge is at 810+75=885.
+            // ClientSize=910 guarantees the buttons fit; the buttons anchor right below.
+            this.ClientSize = new Size(910, 712);
             this.StartPosition = FormStartPosition.CenterParent;
             this.FormBorderStyle = FormBorderStyle.Sizable;
-            this.MinimumSize = new Size(900, 750);
+            this.MinimumSize = this.Size;
 
             // Create main scrollable panel - FILL the space between top and bottom
             var mainPanel = new Panel
@@ -325,6 +328,7 @@ namespace CashDrawer.Client
                 Text = "Save",
                 Location = new Point(720, 15),
                 Size = new Size(80, 40),
+                Anchor = AnchorStyles.Top | AnchorStyles.Right,
                 DialogResult = DialogResult.OK,
                 BackColor = Color.FromArgb(0, 120, 215),
                 ForeColor = Color.White,
@@ -338,6 +342,7 @@ namespace CashDrawer.Client
                 Text = "Cancel",
                 Location = new Point(810, 15),
                 Size = new Size(75, 40),
+                Anchor = AnchorStyles.Top | AnchorStyles.Right,
                 DialogResult = DialogResult.Cancel,
                 FlatStyle = FlatStyle.Flat,
                 Font = new Font("Segoe UI", 10)
@@ -345,13 +350,55 @@ namespace CashDrawer.Client
 
             buttonPanel.Controls.Add(_okButton);
             buttonPanel.Controls.Add(cancelButton);
-            
+
+            // Version display + manual "Check for Updates" (bottom-left of the bar).
+            var versionLabel = new Label
+            {
+                Text = $"Client v{UpdateService.CurrentVersion}",
+                Location = new Point(20, 27),
+                AutoSize = true,
+                ForeColor = Color.Gray,
+                Font = new Font("Segoe UI", 9)
+            };
+            var checkUpdatesButton = new Button
+            {
+                Text = "Check for Updates",
+                Location = new Point(150, 15),
+                Size = new Size(150, 40),
+                FlatStyle = FlatStyle.Flat,
+                Font = new Font("Segoe UI", 9)
+            };
+            checkUpdatesButton.Click += async (s, e) =>
+            {
+                checkUpdatesButton.Enabled = false;
+                try { await UpdateService.CheckAndPromptAsync(this, GetConfiguredManifestUrl(), silentIfCurrent: false); }
+                finally { checkUpdatesButton.Enabled = true; }
+            };
+            buttonPanel.Controls.Add(versionLabel);
+            buttonPanel.Controls.Add(checkUpdatesButton);
+
             // Add in correct order: bottom panel first, then main panel fills rest
             this.Controls.Add(buttonPanel);
             this.Controls.Add(mainPanel);
 
             this.AcceptButton = _okButton;
             this.CancelButton = cancelButton;
+        }
+
+        // Read the configured auto-update manifest URL (client_settings.json), so the
+        // manual "Check for Updates" uses the same source as the startup check.
+        private string GetConfiguredManifestUrl()
+        {
+            try
+            {
+                if (File.Exists(_configFile))
+                {
+                    var existing = JsonSerializer.Deserialize<ConnectionSettings>(File.ReadAllText(_configFile));
+                    return existing?.UpdateManifestUrl ?? "";
+                }
+            }
+            catch { /* fall back to the default manifest URL */ }
+            return "";
         }
 
         private void LoadSettings()

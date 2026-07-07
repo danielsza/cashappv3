@@ -18,6 +18,11 @@ namespace CashDrawer.NetworkAdmin
         private DateTimePicker _logStartDate = null!;
         private DateTimePicker _logEndDate = null!;
         private TextBox _logSearchText = null!;
+        // Raw (unfiltered-by-search) log text from the last server fetch, so the
+        // Search box can filter CLIENT-SIDE instantly — no server round-trip and
+        // no server update required (the date range is still fetched server-side).
+        private string _transactionLogRaw = "";
+        private string _errorLogRaw = "";
         
         private void CreateLogViewerTab()
         {
@@ -96,6 +101,9 @@ namespace CashDrawer.NetworkAdmin
                 Width = 150,
                 PlaceholderText = "Filter logs..."
             };
+            // Filter as you type — client-side over the already-loaded logs (instant,
+            // no server call). Date-range changes still re-fetch from the server.
+            _logSearchText.TextChanged += (s, e) => ApplyLogFilter();
             filterPanel.Controls.Add(_logSearchText);
             
             _refreshLogsButton = new Button
@@ -161,6 +169,11 @@ namespace CashDrawer.NetworkAdmin
             tab.Controls.Add(panel);
             _tabControl.TabPages.Add(tab);
             
+            // Changing the date range re-fetches from the server (date filtering is
+            // server-side); the Search box filters the result client-side.
+            _logStartDate.ValueChanged += (s, e) => RefreshLogs();
+            _logEndDate.ValueChanged += (s, e) => RefreshLogs();
+
             // Initialize timer
             _logRefreshTimer = new Timer { Interval = 30000 }; // 30 seconds
             _logRefreshTimer.Tick += (s, e) => RefreshLogs();
@@ -193,17 +206,18 @@ namespace CashDrawer.NetworkAdmin
                 _statusLabel.Text = "Loading logs...";
                 _statusLabel.ForeColor = Color.Blue;
                 
-                // Get transaction logs
+                // Fetch the full date-range set (search is applied client-side in
+                // ApplyLogFilter, so we send an EMPTY search term to the server —
+                // that way filtering works even against a not-yet-updated server).
                 var startDate = _logStartDate.Value.ToString("yyyy-MM-dd");
                 var endDate = _logEndDate.Value.ToString("yyyy-MM-dd");
-                var searchTerm = _logSearchText.Text;
-                
-                var transactionLogsResponse = await SendCommandAsync(_selectedServer, new ServerRequest 
-                { 
+
+                var transactionLogsResponse = await SendCommandAsync(_selectedServer, new ServerRequest
+                {
                     Command = "get_transaction_logs",
-                    Data = $"{startDate}||{endDate}||{searchTerm}"
+                    Data = $"{startDate}||{endDate}||"
                 });
-                
+
                 if (transactionLogsResponse?.Data != null)
                 {
                     // Data might be a JsonElement, so handle it properly
@@ -216,16 +230,16 @@ namespace CashDrawer.NetworkAdmin
                     {
                         logsData = transactionLogsResponse.Data.ToString() ?? "";
                     }
-                    _transactionLogText.Text = logsData.Replace("||", Environment.NewLine);
+                    _transactionLogRaw = logsData;
                 }
-                
+
                 // Get error logs
                 var errorLogsResponse = await SendCommandAsync(_selectedServer, new ServerRequest
                 {
                     Command = "get_error_logs",
-                    Data = $"{startDate}||{endDate}||{searchTerm}"
+                    Data = $"{startDate}||{endDate}||"
                 });
-                
+
                 if (errorLogsResponse?.Data != null)
                 {
                     // Data might be a JsonElement, so handle it properly
@@ -238,9 +252,10 @@ namespace CashDrawer.NetworkAdmin
                     {
                         logsData = errorLogsResponse.Data.ToString() ?? "";
                     }
-                    _errorLogText.Text = logsData.Replace("||", Environment.NewLine);
+                    _errorLogRaw = logsData;
                 }
-                
+
+                ApplyLogFilter();
                 _statusLabel.Text = $"✓ Logs refreshed at {DateTime.Now:HH:mm:ss}";
                 _statusLabel.ForeColor = Color.Green;
             }
@@ -251,6 +266,23 @@ namespace CashDrawer.NetworkAdmin
                 MessageBox.Show($"Error loading logs: {ex.Message}", "Error",
                     MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
+        }
+
+        // Filter the already-loaded logs by the Search box, client-side (instant).
+        private void ApplyLogFilter()
+        {
+            var term = _logSearchText.Text?.Trim() ?? "";
+            _transactionLogText.Text = FilterLogText(_transactionLogRaw, term);
+            _errorLogText.Text = FilterLogText(_errorLogRaw, term);
+        }
+
+        private static string FilterLogText(string raw, string term)
+        {
+            if (string.IsNullOrEmpty(raw)) return "";
+            var lines = raw.Split(new[] { "||" }, StringSplitOptions.None);
+            if (!string.IsNullOrWhiteSpace(term))
+                lines = lines.Where(l => l.IndexOf(term, StringComparison.OrdinalIgnoreCase) >= 0).ToArray();
+            return string.Join(Environment.NewLine, lines);
         }
     }
 }
