@@ -4,6 +4,8 @@ using System.Drawing;
 using System.Linq;
 using System.Text;
 using System.Windows.Forms;
+using CashDrawer.Shared.Models;
+using CashDrawer.Shared.Utils;
 
 namespace CashDrawer.Client
 {
@@ -43,11 +45,24 @@ namespace CashDrawer.Client
         public List<CashAdjustment> Adjustments { get; private set; } = new();
         public List<SafeDropInfo> SafeDrops { get; set; } = new();
 
-        public EODCountForm(decimal expectedTotal, decimal safeDropTotal, List<SafeDropInfo> safeDrops)
+        /// <summary>
+        /// The business day's transactions, for the printed summary. Already scoped
+        /// by the caller to the same rows DaySummaryCalculator counted, so the
+        /// printed list reconciles with the printed Expected Total. Empty when the
+        /// server couldn't be reached — the summary still prints, just without the log.
+        /// </summary>
+        public List<Transaction> Transactions { get; set; } = new();
+
+        public EODCountForm(
+            decimal expectedTotal,
+            decimal safeDropTotal,
+            List<SafeDropInfo> safeDrops,
+            List<Transaction>? transactions = null)
         {
             ExpectedTotal = expectedTotal;
             SafeDropTotal = safeDropTotal;
             SafeDrops = safeDrops;
+            Transactions = transactions ?? new List<Transaction>();
             InitializeComponent();
         }
 
@@ -523,17 +538,18 @@ namespace CashDrawer.Client
         {
             try
             {
-                // Build EOD summary report
-                var summary = new System.Text.StringBuilder();
-                summary.AppendLine("========================================");
-                summary.AppendLine("     END OF DAY CASH COUNT SUMMARY");
-                summary.AppendLine("========================================");
-                summary.AppendLine($"Date: {DateTime.Now:yyyy-MM-DD HH:mm:ss}");
-                summary.AppendLine();
-                
+                // Build EOD summary report as individual lines — TextReportPrinter
+                // paginates them, so the transaction list can run past one page.
+                var summary = new List<string>();
+                summary.Add("========================================");
+                summary.Add("     END OF DAY CASH COUNT SUMMARY");
+                summary.Add("========================================");
+                summary.Add($"Date: {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
+                summary.Add("");
+
                 // Denomination counts
-                summary.AppendLine("DENOMINATION BREAKDOWN:");
-                summary.AppendLine("----------------------------------------");
+                summary.Add("DENOMINATION BREAKDOWN:");
+                summary.Add("----------------------------------------");
                 foreach (var kvp in _denominationControls.OrderBy(x => _denominations[x.Key]))
                 {
                     var count = (int)kvp.Value.Value;
@@ -541,64 +557,61 @@ namespace CashDrawer.Client
                     var total = count * value;
                     if (count > 0)
                     {
-                        summary.AppendLine($"{kvp.Key,-12} x {count,4} = ${total,8:F2}");
+                        summary.Add($"{kvp.Key,-12} x {count,4} = ${total,8:F2}");
                     }
                 }
-                summary.AppendLine();
-                
+                summary.Add("");
+
                 // Totals
-                summary.AppendLine("TOTALS:");
-                summary.AppendLine("----------------------------------------");
-                summary.AppendLine($"Expected Total:       ${ExpectedTotal,10:F2}");
-                summary.AppendLine($"Safe Drop Total:      ${SafeDropTotal,10:F2}");
-                summary.AppendLine($"Adjusted Expected:    ${AdjustedExpected,10:F2}");
-                summary.AppendLine($"Actual Count:         ${ActualTotal,10:F2}");
-                summary.AppendLine($"Variance:             ${Variance,10:F2}");
-                summary.AppendLine();
-                
+                summary.Add("TOTALS:");
+                summary.Add("----------------------------------------");
+                summary.Add($"Expected Total:       ${ExpectedTotal,10:F2}");
+                summary.Add($"Safe Drop Total:      ${SafeDropTotal,10:F2}");
+                summary.Add($"Adjusted Expected:    ${AdjustedExpected,10:F2}");
+                summary.Add($"Actual Count:         ${ActualTotal,10:F2}");
+                summary.Add($"Variance:             ${Variance,10:F2}");
+                summary.Add("");
+
                 // Safe drops
                 if (SafeDrops != null && SafeDrops.Any())
                 {
-                    summary.AppendLine("SAFE DROPS:");
-                    summary.AppendLine("----------------------------------------");
+                    summary.Add("SAFE DROPS:");
+                    summary.Add("----------------------------------------");
                     foreach (var drop in SafeDrops)
                     {
-                        summary.AppendLine($"  {drop.Timestamp:HH:mm} - ${drop.Amount:F2} (Invoice: {drop.Invoice}, User: {drop.Username})");
+                        summary.Add($"  {drop.Timestamp:HH:mm} - ${drop.Amount:F2} (Invoice: {drop.Invoice}, User: {drop.Username})");
                     }
-                    summary.AppendLine();
+                    summary.Add("");
                 }
-                
+
                 // Adjustments
                 if (Adjustments.Any())
                 {
-                    summary.AppendLine("ADJUSTMENTS:");
-                    summary.AppendLine("----------------------------------------");
+                    summary.Add("ADJUSTMENTS:");
+                    summary.Add("----------------------------------------");
                     foreach (var adj in Adjustments)
                     {
-                        summary.AppendLine($"  ${adj.Amount:F2} - {adj.Reason} (By: {adj.EnteredBy})");
+                        summary.Add($"  ${adj.Amount:F2} - {adj.Reason} (By: {adj.EnteredBy})");
                     }
-                    summary.AppendLine();
+                    summary.Add("");
                 }
-                
-                summary.AppendLine("========================================");
-                
-                // Print using default printer
-                var printDoc = new System.Drawing.Printing.PrintDocument();
-                string textToPrint = summary.ToString();
-                
-                printDoc.PrintPage += (s, ev) =>
-                {
-                    if (ev.Graphics != null)
-                    {
-                        var font = new System.Drawing.Font("Courier New", 10);
-                        ev.Graphics.DrawString(textToPrint, font, System.Drawing.Brushes.Black, 
-                            ev.MarginBounds, System.Drawing.StringFormat.GenericDefault);
-                    }
-                };
-                
-                printDoc.Print();
-                
-                MessageBox.Show("EOD summary sent to printer.", "Print Complete", 
+
+                // Transaction log for the business day. The rows are scoped by the
+                // caller to what DaySummaryCalculator counted, so the footer total
+                // here ties out to Expected Total above (minus the BOD float).
+                summary.Add("TRANSACTION LOG:");
+                summary.Add("----------------------------------------");
+                summary.AddRange(TransactionReportFormatter.Table(Transactions));
+                summary.Add("");
+
+                summary.Add("========================================");
+
+                TextReportPrinter.Print(
+                    summary,
+                    repeatHeader: TransactionReportFormatter.Header(),
+                    documentName: $"EOD Summary {DateTime.Now:yyyy-MM-dd}");
+
+                MessageBox.Show("EOD summary sent to printer.", "Print Complete",
                     MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
             catch (Exception ex)

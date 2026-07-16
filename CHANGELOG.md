@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.11.4] - 2026-07-16
+
+### Added
+- **Transaction log on the EOD print summary** - The printed End-of-Day summary now
+  includes a compact one-line-per-transaction table for the business day, with a
+  count and total footer, so the printout reconciles on its own without opening the
+  Admin Tool. Rows are scoped with the same `DaySummaryCalculator` logic the totals
+  use, so the list always ties out to the printed Expected Total. Fetched via the
+  existing `get_transaction_logs` command, so **no server update is required**; if
+  the fetch fails the summary still prints, just without the log.
+- **Print button on the Admin Tool log viewer** - Prints the currently displayed log
+  tab exactly as filtered. Transactions render as a fixed-width table (with a date
+  column); errors print verbatim. Log lines in the legacy 9-field format that can't
+  be parsed are printed as stored under an "Unrecognized lines" heading rather than
+  being silently dropped.
+
+### Fixed
+- **EOD summary printed the wrong date** - The date line used the format string
+  `yyyy-MM-DD`; `DD` is not a valid .NET format specifier, so every printed EOD
+  summary rendered an incorrect date. Now `yyyy-MM-dd`.
+- **Printed reports silently clipped at one page** - Printing drew the whole report
+  into the page rectangle in a single `DrawString` and never set `HasMorePages`, so
+  any content past the bottom of page 1 was dropped with no error. Reports now
+  paginate line-by-line and repeat column headers on continuation pages.
+
 ## [3.11.0] - 2026-07-06
 
 ### Added

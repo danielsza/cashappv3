@@ -1,7 +1,7 @@
 {
-  "version": "3.11.3",
-  "url": "https://github.com/danielsza/cashappv3/releases/download/v3.11.3/CashDrawerSetup.msi",
-  "notes": "Client now relaunches automatically after an update installs. NetworkAdmin + client Settings show the connected server's version (needs server on 3.11.3+). Includes prior 3.11.x fixes.",
+  "version": "3.11.4",
+  "url": "https://github.com/danielsza/cashappv3/releases/download/v3.11.4/CashDrawerSetup.msi",
+  "notes": "The printed End-of-Day summary now includes the day's transaction log, and the Admin Tool can print the log viewer. Also fixes the wrong date on EOD printouts and printed reports being cut off after one page.",
   "mandatory": false,
-  "sha256": "faf86c645cbc31cb82a2e4c5819bd063840768885b88c62021baad79037849bb"
+  "sha256": "4ebb7f00680b3005ec7bfc767cce9c8a1f99c5c070be1f14a17fbe96a65d4838"
 }

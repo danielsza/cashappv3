@@ -8,6 +8,7 @@ using System.Windows.Forms;
 using System.Threading.Tasks;
 using CashDrawer.Shared.Models;
 using CashDrawer.Shared.Services;
+using CashDrawer.Shared.Utils;
 
 namespace CashDrawer.Client
 {
@@ -1185,11 +1186,16 @@ namespace CashDrawer.Client
                 }
                 catch (Exception ex)
                 {
-                    MessageBox.Show($"Could not get day summary: {ex.Message}\nUsing manual entry.", 
+                    MessageBox.Show($"Could not get day summary: {ex.Message}\nUsing manual entry.",
                         "Warning", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 }
-                
-                using var eodForm = new EODCountForm(expectedTotal, safeDropTotal, safeDrops);
+
+                // Fetch the business day's transactions for the printed EOD summary.
+                // Best-effort: if this fails the summary still prints, just without
+                // the log — never block closing the day over a printout detail.
+                var eodTransactions = await LoadBusinessDayTransactionsAsync();
+
+                using var eodForm = new EODCountForm(expectedTotal, safeDropTotal, safeDrops, eodTransactions);
                 if (eodForm.ShowDialog(this) != DialogResult.OK)
                     return;
                 
@@ -1772,5 +1778,90 @@ namespace CashDrawer.Client
             }
             return null;
         }
+
+        /// <summary>
+        /// Loads the current business day's transactions for the printed EOD summary.
+        ///
+        /// Uses the existing get_transaction_logs command rather than extending
+        /// get_day_summary, so this works against servers that haven't been updated
+        /// yet. Scope is decided CLIENT-side by DaySummaryCalculator — the same code
+        /// the server uses for the totals — so the printed rows always reconcile with
+        /// the printed Expected Total. That also makes us immune to the pre-3.11
+        /// server-side date-filter bug: a stale server just returns extra rows, and
+        /// we discard them here.
+        ///
+        /// Best-effort by design: any failure returns an empty list and the summary
+        /// prints without the log rather than blocking the day close.
+        /// </summary>
+        private async Task<List<Transaction>> LoadBusinessDayTransactionsAsync()
+        {
+            try
+            {
+                if (_networkClient == null) return new List<Transaction>();
+
+                // Yesterday..today: a BOD after midnight still anchors to its own
+                // calendar date, and the calculator drops anything off the business day.
+                var start = DateTime.Today.AddDays(-1).ToString("yyyy-MM-dd");
+                var end = DateTime.Today.ToString("yyyy-MM-dd");
+
+                var response = await _networkClient.SendRequestAsync(new ServerRequest
+                {
+                    Command = "get_transaction_logs",
+                    Data = $"{start}||{end}||"
+                });
+
+                if (response?.Status != "success" || response.Data == null)
+                    return new List<Transaction>();
+
+                var raw = response.Data is JsonElement je
+                    ? je.GetString() ?? ""
+                    : response.Data.ToString() ?? "";
+
+                var parsed = raw
+                    .Split(new[] { "||" }, StringSplitOptions.None)
+                    .Select(Transaction.FromLogLine)
+                    .Where(t => t != null)
+                    .Select(t => t!)
+                    .ToList();
+
+                if (parsed.Count == 0) return new List<Transaction>();
+
+                // Re-derive the business day scope. The float lookup is irrelevant
+                // here (we only need BusinessDate/SessionStart), so it returns null.
+                var summary = DaySummaryCalculator.Compute(
+                    parsed.Select(t => new DaySummaryLine
+                    {
+                        Timestamp = t.Timestamp,
+                        DocumentType = t.DocumentType,
+                        ServerID = t.ServerID,
+                        Total = t.Total,
+                        AmountIn = t.AmountIn,
+                        AmountOut = t.AmountOut
+                    }),
+                    _ => null,
+                    DateTime.Today);
+
+                var businessDate = DateTime.TryParse(summary.BusinessDate, out var bd)
+                    ? bd.Date
+                    : DateTime.Today;
+
+                // Mirror DaySummaryCalculator's inclusion rules exactly.
+                return parsed
+                    .Where(t => t.Timestamp.Date == businessDate)
+                    .Where(t => t.Timestamp >= summary.SessionStart)
+                    .Where(t => !IsDayMarker(t.DocumentType))
+                    .OrderBy(t => t.Timestamp)
+                    .ToList();
+            }
+            catch
+            {
+                // Printing the log is a convenience; never break EOD over it.
+                return new List<Transaction>();
+            }
+        }
+
+        private static bool IsDayMarker(string? docType) =>
+            string.Equals(docType?.Trim(), "BOD", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(docType?.Trim(), "EOD", StringComparison.OrdinalIgnoreCase);
     }
 }

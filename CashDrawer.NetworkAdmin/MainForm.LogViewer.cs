@@ -1,9 +1,11 @@
 using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.Linq;
 using System.Text.Json;
 using System.Windows.Forms;
 using CashDrawer.Shared.Models;
+using CashDrawer.Shared.Utils;
 
 namespace CashDrawer.NetworkAdmin
 {
@@ -13,6 +15,7 @@ namespace CashDrawer.NetworkAdmin
         private TextBox _transactionLogText = null!;
         private TextBox _errorLogText = null!;
         private Button _refreshLogsButton = null!;
+        private Button _printLogsButton = null!;
         private CheckBox _autoRefreshLogsCheck = null!;
         private Timer? _logRefreshTimer;
         private DateTimePicker _logStartDate = null!;
@@ -98,34 +101,44 @@ namespace CashDrawer.NetworkAdmin
             _logSearchText = new TextBox
             {
                 Location = new Point(400, 12),
-                Width = 150,
+                Width = 120,
                 PlaceholderText = "Filter logs..."
             };
             // Filter as you type — client-side over the already-loaded logs (instant,
             // no server call). Date-range changes still re-fetch from the server.
             _logSearchText.TextChanged += (s, e) => ApplyLogFilter();
             filterPanel.Controls.Add(_logSearchText);
-            
+
             _refreshLogsButton = new Button
             {
                 Text = "🔄 Refresh",
-                Location = new Point(560, 10),
-                Size = new Size(90, 28),
+                Location = new Point(527, 10),
+                Size = new Size(85, 28),
                 Font = new Font("Segoe UI", 9, FontStyle.Bold)
             };
             _refreshLogsButton.Click += RefreshLogsButton_Click;
             filterPanel.Controls.Add(_refreshLogsButton);
-            
+
             _autoRefreshLogsCheck = new CheckBox
             {
                 Text = "Auto",
-                Location = new Point(660, 15),
-                Size = new Size(60, 20),
+                Location = new Point(617, 15),
+                Size = new Size(48, 20),
                 Font = new Font("Segoe UI", 8)
             };
             _autoRefreshLogsCheck.CheckedChanged += AutoRefreshLogsCheck_CheckedChanged;
             filterPanel.Controls.Add(_autoRefreshLogsCheck);
-            
+
+            _printLogsButton = new Button
+            {
+                Text = "🖨️ Print",
+                Location = new Point(667, 10),
+                Size = new Size(85, 28),
+                Font = new Font("Segoe UI", 9, FontStyle.Bold)
+            };
+            _printLogsButton.Click += PrintLogsButton_Click;
+            filterPanel.Controls.Add(_printLogsButton);
+
             panel.Controls.Add(filterPanel);
             y += 65;
             
@@ -182,6 +195,98 @@ namespace CashDrawer.NetworkAdmin
         private void RefreshLogsButton_Click(object? sender, EventArgs e)
         {
             RefreshLogs();
+        }
+
+        /// <summary>
+        /// Prints the log tab currently on screen, exactly as filtered — what you see
+        /// is what prints. Transactions render as a fixed-width table (same layout as
+        /// the EOD summary); errors print verbatim since they aren't transactions.
+        /// </summary>
+        private void PrintLogsButton_Click(object? sender, EventArgs e)
+        {
+            try
+            {
+                bool isTransactions = _logTabControl.SelectedIndex == 0;
+                var displayed = (isTransactions ? _transactionLogText.Text : _errorLogText.Text) ?? "";
+
+                var lines = displayed
+                    .Split(new[] { Environment.NewLine, "\n" }, StringSplitOptions.None)
+                    .Where(l => !string.IsNullOrWhiteSpace(l))
+                    .ToList();
+
+                if (lines.Count == 0)
+                {
+                    MessageBox.Show("There is nothing to print — the current view is empty.",
+                        "Print", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    return;
+                }
+
+                var report = new List<string>
+                {
+                    "========================================",
+                    isTransactions ? "        TRANSACTION LOG" : "           ERROR LOG",
+                    "========================================",
+                    $"Server:   {_selectedServer?.ServerID ?? "(unknown)"}",
+                    $"Range:    {_logStartDate.Value:yyyy-MM-dd} to {_logEndDate.Value:yyyy-MM-dd}",
+                    $"Printed:  {DateTime.Now:yyyy-MM-dd HH:mm:ss}"
+                };
+
+                var search = _logSearchText.Text?.Trim() ?? "";
+                if (!string.IsNullOrEmpty(search))
+                    report.Add($"Search:   \"{search}\"");
+
+                report.Add("");
+
+                IEnumerable<string> repeatHeader = Enumerable.Empty<string>();
+
+                if (isTransactions)
+                {
+                    // Legacy log lines (9 fields, pre-TransactionId) don't parse. Print
+                    // them verbatim rather than dropping them — a printed log that
+                    // quietly omits rows is worse than an ugly one.
+                    var parsed = new List<Transaction>();
+                    var unparsed = new List<string>();
+                    foreach (var line in lines)
+                    {
+                        var txn = Transaction.FromLogLine(line);
+                        if (txn != null) parsed.Add(txn);
+                        else unparsed.Add(line);
+                    }
+
+                    report.AddRange(TransactionReportFormatter.Table(parsed, includeDate: true));
+                    repeatHeader = TransactionReportFormatter.Header(includeDate: true);
+
+                    if (unparsed.Count > 0)
+                    {
+                        report.Add("");
+                        report.Add($"UNRECOGNIZED LINES ({unparsed.Count}) — printed as stored:");
+                        report.Add("----------------------------------------");
+                        report.AddRange(unparsed);
+                    }
+                }
+                else
+                {
+                    report.AddRange(lines);
+                }
+
+                report.Add("");
+                report.Add("========================================");
+
+                TextReportPrinter.Print(
+                    report,
+                    repeatHeader: repeatHeader,
+                    documentName: $"CashDrawer {(isTransactions ? "Transactions" : "Errors")} {DateTime.Now:yyyy-MM-dd}");
+
+                _statusLabel.Text = $"✓ Sent {lines.Count} line(s) to printer";
+                _statusLabel.ForeColor = Color.Green;
+            }
+            catch (Exception ex)
+            {
+                _statusLabel.Text = $"✗ Print failed: {ex.Message}";
+                _statusLabel.ForeColor = Color.Red;
+                MessageBox.Show($"Error printing logs: {ex.Message}", "Print Error",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
         }
         
         private void AutoRefreshLogsCheck_CheckedChanged(object? sender, EventArgs e)
