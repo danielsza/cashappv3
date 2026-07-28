@@ -1,7 +1,7 @@
 {
-  "version": "3.11.4",
-  "url": "https://github.com/danielsza/cashappv3/releases/download/v3.11.4/CashDrawerSetup.msi",
-  "notes": "The printed End-of-Day summary now includes the day's transaction log, and the Admin Tool can print the log viewer. Also fixes the wrong date on EOD printouts and printed reports being cut off after one page.",
+  "version": "3.11.5",
+  "url": "https://github.com/danielsza/cashappv3/releases/download/v3.11.5/CashDrawerSetup.msi",
+  "notes": "Fixes duplicate transactions. Clicking Open Drawer again while the first one is still going no longer records a second transaction (those showed up with a blank invoice number), and a transaction that is retried automatically after a dropped connection is no longer counted twice.",
   "mandatory": false,
-  "sha256": "4ebb7f00680b3005ec7bfc767cce9c8a1f99c5c070be1f14a17fbe96a65d4838"
+  "sha256": "ef6fc01ef2bd649383346613127ccef52ab16490b158983e750d380a307323e0"
 }
