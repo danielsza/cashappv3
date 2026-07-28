@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.11.5] - 2026-07-28
+
+### Fixed
+- **Duplicate transactions from a re-clicked Open Drawer** - The Open Drawer handler
+  was `async void` with the button left enabled (and Enter in the IN field triggers
+  it), so a cashier who clicked again because the server was slow started a second
+  submission. The amounts were captured before the password prompt but the document
+  number was read from the textbox *after* it, and the first transaction's cleanup
+  ran `ClearForm()` inside the password dialog's nested message loop - so the second
+  submission was logged with the same amounts and a **blank invoice number**. The
+  handler now refuses re-entry and disables the button while a submission is in
+  flight, and the document number is snapshotted with the amounts and used for the
+  request, the receipt and the safe-drop record. Four transactions were double
+  counted this way between January and July 2026.
+- **Duplicate transactions from an automatic retry** - `SendWithFailoverAsync`
+  resends a request when the response is lost, but the server had already opened the
+  drawer and written the log line, and generated the transaction ID itself, so the
+  resend was recorded as a second transaction. The client now mints an idempotency
+  key per submission (`ClientTransactionId`) which travels with every retry, and the
+  server adopts it as the transaction ID so the existing duplicate check refuses the
+  second write. Because the key is identical on both servers, this also covers a
+  retry that fails over to the peer - previously that produced two rows with
+  different IDs that peer sync then happily kept.
+
+  Keys are accepted only in a restricted character set and length, and fall back to
+  server-side ID generation otherwise, so pre-3.11.5 clients are unaffected. **The
+  retry fix requires the servers to be on 3.11.5**; the re-click fix is client-side
+  and takes effect as soon as the client updates.
+
 ## [3.11.4] - 2026-07-16
 
 ### Added

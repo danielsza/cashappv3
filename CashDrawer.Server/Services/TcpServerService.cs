@@ -303,9 +303,13 @@ namespace CashDrawer.Server.Services
                 return new ServerResponse { Status = "error", Message = "Failed to open drawer" };
             }
 
-            // Log transaction
+            // Log transaction. Adopting the client's idempotency key as the
+            // TransactionId makes a retried submission (lost response -> automatic
+            // resend, possibly to the peer server) collapse onto the row that was
+            // already written instead of double-counting the cash.
             var transaction = new Transaction
             {
+                TransactionId = SanitizeClientTransactionId(request.ClientTransactionId),
                 Timestamp = DateTime.Now,
                 ServerID = _config.ServerID,
                 Username = user.Username,
@@ -317,7 +321,15 @@ namespace CashDrawer.Server.Services
                 AmountOut = request.AmountOut
             };
 
-            _transactionLogger.LogTransaction(transaction);
+            if (!_transactionLogger.LogTransaction(transaction))
+            {
+                // Already logged under this key - the drawer was opened again above,
+                // which is what the retry wanted, but the ledger stays untouched.
+                _logger.LogWarning(
+                    $"Duplicate submission suppressed: {transaction.TransactionId} - " +
+                    $"{user.Username} - {transaction.DocumentType} {transaction.DocumentNumber} " +
+                    $"${transaction.Total} (already logged, not counted twice)");
+            }
 
             return new ServerResponse
             {
@@ -327,6 +339,30 @@ namespace CashDrawer.Server.Services
                 Username = user.Username,
                 Name = user.Name
             };
+        }
+
+        /// <summary>
+        /// Vet a client-supplied idempotency key before it becomes a TransactionId.
+        /// Only a conservative shape is accepted (letters/digits/dash/underscore, at
+        /// most 64 chars) so a malformed or hostile value can never shift the
+        /// pipe-delimited log columns or masquerade as a leading timestamp.
+        /// Returns "" for anything unusable, which makes the server generate an ID
+        /// exactly as it did before - that is the pre-3.11.5 client path.
+        /// </summary>
+        private static string SanitizeClientTransactionId(string? clientId)
+        {
+            if (string.IsNullOrWhiteSpace(clientId)) return "";
+
+            var trimmed = clientId.Trim();
+            if (trimmed.Length > 64) return "";
+
+            foreach (var c in trimmed)
+            {
+                if (!char.IsLetterOrDigit(c) && c != '-' && c != '_')
+                    return "";
+            }
+
+            return trimmed;
         }
 
         /// <summary>

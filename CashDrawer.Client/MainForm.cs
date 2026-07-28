@@ -56,6 +56,12 @@ namespace CashDrawer.Client
         private TextBox _inText = null!;
         private TextBox _outText = null!;
         private Button _openButton = null!;
+
+        /// <summary>
+        /// True while a drawer submission is in flight. Guards OpenButton_Click
+        /// against re-entry - see the comment there.
+        /// </summary>
+        private bool _submitting;
         private Label _lastActionLabel = null!;
         private Button _settingsButton = null!;
         private Button _changePasswordButton = null!;
@@ -952,7 +958,31 @@ namespace CashDrawer.Client
 
         private async void OpenButton_Click(object? sender, EventArgs e)
         {
-            await OpenDrawerAsync();
+            // Re-entrancy guard. This handler is async void, the button stays
+            // clickable while the request is in flight, and Enter in the IN field
+            // fires it too (see TextBox_KeyDown). Without this guard a cashier who
+            // clicks again because the server is slow starts a SECOND submission:
+            // the first one's continuation then runs ClearForm() inside the password
+            // dialog's nested message loop, and the second request - whose amounts
+            // were already captured - goes out with a blank document number.
+            if (_submitting) return;
+
+            _submitting = true;
+            // Show the wait in the caption rather than disabling the button: the
+            // failover path owns _openButton.Enabled (it turns the button off when no
+            // server can be reached) and toggling it here would either strand it off
+            // or override that decision.
+            var caption = _openButton.Text;
+            _openButton.Text = "Working...";
+            try
+            {
+                await OpenDrawerAsync();
+            }
+            finally
+            {
+                _submitting = false;
+                _openButton.Text = caption;
+            }
         }
 
         private async Task OpenDrawerAsync()
@@ -1424,10 +1454,16 @@ namespace CashDrawer.Client
                 }
             }
 
+            // Snapshot the document number alongside the amounts below. Everything
+            // downstream must use this local, never _docNumberText.Text: the password
+            // dialog pumps messages, so ClearForm() from another submission can wipe
+            // the control between here and the point the request is built.
+            string docNumber = _docNumberText.Text;
+
             // Validate document number for certain types
             if (docType == "Invoice" || docType == "Refund" || docType == "Petty Cash")
             {
-                if (string.IsNullOrWhiteSpace(_docNumberText.Text))
+                if (string.IsNullOrWhiteSpace(docNumber))
                 {
                     MessageBox.Show($"{docType} requires a document number", "Validation Error",
                         MessageBoxButtons.OK, MessageBoxIcon.Warning);
@@ -1493,17 +1529,21 @@ namespace CashDrawer.Client
 
             try
             {
-                // Send request
+                // Send request. ClientTransactionId is minted once per submission and
+                // travels with every automatic retry of it, so a resend after a lost
+                // response (SendWithFailoverAsync, possibly onto the backup server)
+                // collapses onto the row already logged instead of double-counting.
                 var request = new ServerRequest
                 {
                     Command = "open_drawer",
                     Password = password,
                     Reason = "Transaction",
                     DocumentType = docType,
-                    DocumentNumber = _docNumberText.Text,
+                    DocumentNumber = docNumber,
                     Total = total,
                     AmountIn = amountIn,
-                    AmountOut = amountOut
+                    AmountOut = amountOut,
+                    ClientTransactionId = NewClientTransactionId()
                 };
 
                 // Send with full auto-recovery: live connection -> primary ->
@@ -1537,7 +1577,7 @@ namespace CashDrawer.Client
                             Username = response.Name ?? response.Username ?? "Unknown",
                             TransactionId = $"{docType.Substring(0, Math.Min(3, docType.Length)).ToUpper()}-{DateTime.Now:yyyyMMddHHmmss}",
                             Amount = total,  // Keep sign - negative for refunds/petty cash
-                            Invoice = _docNumberText.Text,
+                            Invoice = docNumber,
                             Reason = docType == "Petty Cash" ? _currentPettyCashReason : null,
                             RecipientName = docType == "Petty Cash" ? _currentPettyCashRecipient : null
                         };
@@ -1572,7 +1612,7 @@ namespace CashDrawer.Client
                                     Username = response.Name ?? response.Username ?? "Unknown",
                                     TransactionId = $"SD-{DateTime.Now:yyyyMMddHHmmss}",
                                     Amount = Math.Abs(total),
-                                    Invoice = _docNumberText.Text,
+                                    Invoice = docNumber,
                                     Notes = "Cash deposited to safe"
                                 };
                                 printService.PrintTransaction(safeDropPrint);
@@ -1586,7 +1626,7 @@ namespace CashDrawer.Client
                                         Command = "record_safe_drop",
                                         Username = response.Username,
                                         Total = Math.Abs(total),
-                                        DocumentNumber = _docNumberText.Text,
+                                        DocumentNumber = docNumber,
                                         Data = "confirmed"
                                     });
                                 }
@@ -1603,7 +1643,7 @@ namespace CashDrawer.Client
                                         Command = "record_safe_drop",
                                         Username = response.Username,
                                         Total = Math.Abs(total),
-                                        DocumentNumber = _docNumberText.Text,
+                                        DocumentNumber = docNumber,
                                         Data = "skipped"
                                     });
                                 }
@@ -1643,6 +1683,17 @@ namespace CashDrawer.Client
                 _statusLabel.ForeColor = Color.Red;
             }
         }
+
+        /// <summary>
+        /// Mint an idempotency key for one user-initiated submission. The server
+        /// adopts it as the TransactionId, so it must be unique per submission and
+        /// stable across that submission's retries. Shaped like the server's own IDs
+        /// (prefix-timestamp-random) so log lines stay readable; the CLI prefix marks
+        /// it as client-minted. Restricted to the characters the server accepts in
+        /// SanitizeClientTransactionId.
+        /// </summary>
+        private static string NewClientTransactionId()
+            => $"CLI-{DateTime.Now:yyyyMMddHHmmssfff}-{Guid.NewGuid().ToString("N").Substring(0, 8)}";
 
         private void ClearForm()
         {

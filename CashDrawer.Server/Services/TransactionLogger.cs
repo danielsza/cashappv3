@@ -83,7 +83,11 @@ namespace CashDrawer.Server.Services
         /// <summary>
         /// Log transaction to file
         /// </summary>
-        public void LogTransaction(Transaction transaction)
+        /// <returns>
+        /// True if the transaction was written, false if it was skipped as a duplicate
+        /// of one already logged (same TransactionId).
+        /// </returns>
+        public bool LogTransaction(Transaction transaction)
         {
             lock (_lock)
             {
@@ -91,14 +95,14 @@ namespace CashDrawer.Server.Services
                 {
                     // Generate unique ID if not set
                     transaction.GenerateId();
-                    
+
                     // Skip if already logged (duplicate sync)
                     if (_syncedTransactionIds.Contains(transaction.TransactionId))
                     {
                         _logger.LogDebug($"Skipping duplicate transaction: {transaction.TransactionId}");
-                        return;
+                        return false;
                     }
-                    
+
                     var logLine = transaction.ToString();
                     
                     // Log to local file
@@ -119,10 +123,12 @@ namespace CashDrawer.Server.Services
                     }
 
                     _logger.LogInformation($"Transaction logged: {transaction.TransactionId} - {transaction.Username} - {transaction.Reason}");
+                    return true;
                 }
                 catch (Exception ex)
                 {
                     _logger.LogError(ex, "Failed to log transaction");
+                    return false;
                 }
             }
         }

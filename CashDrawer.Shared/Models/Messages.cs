@@ -19,6 +19,17 @@ namespace CashDrawer.Shared.Models
         public decimal AmountOut { get; set; }
         public object? Data { get; set; }  // For generic data passing (e.g., user sync)
         public string? ClientIP { get; set; }  // Client IP address (set by server from connection)
+
+        /// <summary>
+        /// Idempotency key for open_drawer. The client mints one per user-initiated
+        /// submission and reuses it for every automatic retry of that submission, so a
+        /// retry after a lost response cannot log the transaction a second time.
+        /// The server adopts it as the TransactionId, which also makes the dedupe work
+        /// across servers (a retry that fails over to the peer produces the same ID,
+        /// so peer sync collapses the two copies instead of keeping both).
+        /// Null from pre-3.11.5 clients - the server then generates an ID as before.
+        /// </summary>
+        public string? ClientTransactionId { get; set; }
     }
     
     /// <summary>
