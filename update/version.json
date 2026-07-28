@@ -1,7 +1,7 @@
 {
-  "version": "3.11.6",
-  "url": "https://github.com/danielsza/cashappv3/releases/download/v3.11.6/CashDrawerSetup.msi",
-  "notes": "The cash drawer now opens right after you log in for Beginning of Day and End of Day, so the cash is in front of you while you count it. Previously End of Day did not open the drawer until the count was submitted, and BOD opened it twice. Also includes the 3.11.5 duplicate transaction fixes.",
+  "version": "3.11.7",
+  "url": "https://github.com/danielsza/cashappv3/releases/download/v3.11.7/CashDrawerSetup.msi",
+  "notes": "The client now saves a log when something goes wrong instead of closing silently, and an unexpected error no longer shuts the till down. Also fixes the underlying cause of transactions occasionally being recorded twice: a background connection check could interrupt a transaction that was still waiting on the drawer.",
   "mandatory": false,
-  "sha256": "7be540750f13af339dea2db892aca61b01124c166091077023b99e3f9f1a976f"
+  "sha256": "fd9cad006334a02f0827abde408fda51942a69ea3e9a16d7a784f8cdfe28204c"
 }
