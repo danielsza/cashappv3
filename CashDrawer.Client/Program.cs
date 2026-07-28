@@ -39,6 +39,11 @@ namespace CashDrawer.Client
 
             try
             {
+                // Must be installed before anything can fault. Without this an
+                // unhandled exception killed the client silently, leaving nothing
+                // to diagnose when a cashier reported "it crashed".
+                CrashLogger.Install();
+
                 Application.EnableVisualStyles();
                 Application.SetCompatibleTextRenderingDefault(false);
                 Application.SetHighDpiMode(HighDpiMode.SystemAware);

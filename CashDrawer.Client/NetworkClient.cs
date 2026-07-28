@@ -16,7 +16,23 @@ namespace CashDrawer.Client
         private string? _serverHost;
         private int _serverPort;
 
+        // One request at a time. This connection is shared by the transaction path
+        // and the background timers, and WinForms pumps those timers during an
+        // await - so without this two requests could sit on the same socket and
+        // read each other's replies.
+        private readonly SemaphoreSlim _sendLock = new(1, 1);
+        private int _inFlight;
+
         public bool IsConnected => _tcpClient?.Connected ?? false;
+
+        /// <summary>
+        /// True while a request is on the wire. Callers that might otherwise tear
+        /// this connection down (the connection monitor) check it first - disposing
+        /// a socket mid-request makes the pending read fail, which the caller can
+        /// only read as "the server never answered", and a resent transaction is a
+        /// duplicate in the cash log.
+        /// </summary>
+        public bool IsBusy => System.Threading.Volatile.Read(ref _inFlight) > 0;
 
         // Default connect timeout (ms). Without this, TcpClient.Connect blocks for
         // ~20s on an unreachable host, which would freeze failover and the UI.
@@ -145,6 +161,8 @@ namespace CashDrawer.Client
             if (!IsConnected)
                 throw new Exception("Not connected to server");
 
+            Interlocked.Increment(ref _inFlight);
+            await _sendLock.WaitAsync();
             try
             {
                 // Serialize and send request
@@ -183,12 +201,18 @@ namespace CashDrawer.Client
             {
                 throw new Exception($"Communication error: {ex.Message}");
             }
+            finally
+            {
+                _sendLock.Release();
+                Interlocked.Decrement(ref _inFlight);
+            }
         }
 
         public void Dispose()
         {
             _stream?.Dispose();
             _tcpClient?.Dispose();
+            _sendLock.Dispose();
         }
     }
 

@@ -5,6 +5,38 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.11.7] - 2026-07-28
+
+### Added
+- **The client now records crashes** - There was no global exception handling at
+  all: an unhandled exception on the UI thread killed the client instantly and
+  wrote nothing anywhere, so "it crashed" left nothing to diagnose. Faults are now
+  written to `%LOCALAPPDATA%\CashDrawer\Logs\client-errors-<date>.log` with the
+  version, machine, user and full stack trace, covering the UI thread, background
+  threads and unobserved tasks. A UI-thread fault no longer takes the till down -
+  the user gets a dialog naming the log file and warning them to check the drawer
+  and the transaction log before repeating the action.
+
+### Fixed
+- **The connection monitor could pull the socket out from under a transaction** -
+  It runs every 15 seconds on the UI thread, and WinForms pumps timers during an
+  `await` and inside modal dialogs, so it could fire while a drawer request was
+  still on the wire. Because it reconnected by disposing the `NetworkClient`, the
+  pending read failed; the caller cannot distinguish that from a server that never
+  answered, so it resent the transaction - which landed a second time, typically on
+  the other server. The drawer relay stalling (the server logs COM port semaphore
+  timeouts) is what held the request open long enough for the timer to land. The
+  monitor now skips a tick while a request is in flight, and a connection that is
+  still mid-request is never disposed.
+- **Two requests could share one connection** - The transaction path and the
+  background notification poll used the same `NetworkClient` with no
+  serialization, so both could sit on the socket at once and read each other's
+  replies. Requests are now serialized, and the poll skips its tick rather than
+  queueing behind a transaction.
+
+  Together these remove the *cause* of the duplicate transactions that 3.11.5 made
+  harmless after the fact.
+
 ## [3.11.6] - 2026-07-28
 
 ### Fixed

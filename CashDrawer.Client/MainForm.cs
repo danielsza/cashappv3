@@ -393,6 +393,11 @@ namespace CashDrawer.Client
             if (_networkClient == null || !_networkClient.IsConnected)
                 return;
 
+            // Skip this tick rather than queue behind an in-flight transaction -
+            // notifications are cosmetic and the next tick is 10 seconds away.
+            if (_networkClient.IsBusy || _submitting)
+                return;
+
             try
             {
                 var request = new ServerRequest
@@ -613,6 +618,17 @@ namespace CashDrawer.Client
             // 2) Connection health - if we've dropped, try to recover in the
             //    background (primary -> backup -> rediscover on IP change).
             if (_reconnecting) return;
+
+            // Never recover underneath a transaction. This tick runs on the UI
+            // thread, and WinForms pumps timers during an await and inside modal
+            // dialogs - so it can fire while a drawer request is still on the wire
+            // (the relay can stall for seconds; the server logs COM port timeouts).
+            // Reconnecting here disposes the socket that request is reading from,
+            // which surfaces as "the server never answered" and gets the
+            // transaction resent - a duplicate in the cash log, on the other server.
+            if (_submitting) return;
+            if (_networkClient != null && _networkClient.IsBusy) return;
+
             if (_networkClient != null && _networkClient.IsConnected) return;
 
             await TryReconnectAsync(announce: true);
@@ -728,9 +744,16 @@ namespace CashDrawer.Client
         {
             try
             {
-                _networkClient?.Dispose();
+                // Swap first, and only dispose the old connection once it is idle.
+                // Disposing one that still has a request on the wire kills that
+                // request's read, and the caller can't tell that from a server that
+                // never answered - it resends, and the transaction lands twice.
+                // A busy client is left for the GC instead; that is rare and far
+                // cheaper than a duplicate in the cash log.
+                var previous = _networkClient;
                 _networkClient = new NetworkClient();
                 _networkClient.Connect(host, port);
+                if (previous != null && !previous.IsBusy) previous.Dispose();
                 _connectedServerID = tag;
                 SetStatus($"● Connected ({tag})",
                     tag == "PRIMARY" ? Color.Green : Color.DarkOrange,
