@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.11.6] - 2026-07-28
+
+### Fixed
+- **The drawer now opens once, at the right time, for both BOD and EOD** - At EOD the
+  drawer did not open until the count was submitted, so there was nothing to count
+  when the count screen appeared: login ran `authenticate`, which only checks
+  credentials and never touches the relay. EOD now opens the drawer straight after
+  login, the way BOD already did.
+- **BOD no longer opens the drawer twice** - BOD opened it for the count and then
+  again when the float was recorded. Recording a BOD or EOD count now carries
+  `SkipDrawerOpen`, so the drawer is opened exactly once per operation - up front,
+  where the cash is actually handled.
+
+  EOD login still verifies username *and* password before opening; the open request
+  that follows authenticates by password alone, so it was added after that check
+  rather than replacing it. Pre-3.11.6 servers ignore the flag and behave as they do
+  today, so **the single-open behaviour needs the servers on 3.11.6**.
+
 ## [3.11.5] - 2026-07-28
 
 ### Fixed

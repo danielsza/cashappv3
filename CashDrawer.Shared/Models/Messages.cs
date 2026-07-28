@@ -30,6 +30,15 @@ namespace CashDrawer.Shared.Models
         /// Null from pre-3.11.5 clients - the server then generates an ID as before.
         /// </summary>
         public string? ClientTransactionId { get; set; }
+
+        /// <summary>
+        /// Set on an open_drawer that should only record the transaction, because the
+        /// caller already opened the drawer for this operation. BOD and EOD open it
+        /// up front (via open_drawer_only) so the cash can be counted, and would
+        /// otherwise pop it a second time when the count is submitted.
+        /// Ignored by pre-3.11.6 servers, which just open it again as they do today.
+        /// </summary>
+        public bool SkipDrawerOpen { get; set; }
     }
     
     /// <summary>

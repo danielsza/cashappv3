@@ -1081,7 +1081,9 @@ namespace CashDrawer.Client
                         DocumentNumber = DateTime.Today.ToString("yyyyMMdd"),
                         Total = bodForm.TotalFloat,
                         AmountIn = bodForm.TotalFloat,
-                        AmountOut = 0
+                        AmountOut = 0,
+                        // Already opened above for the count - don't pop it again.
+                        SkipDrawerOpen = true
                     };
                     
                     var bodResponse = await _networkClient!.SendRequestAsync(bodRequest);
@@ -1166,7 +1168,47 @@ namespace CashDrawer.Client
                         MessageBoxIcon.Error);
                     return;
                 }
-                
+
+                // Open the drawer now, the same way BOD does, so the cash can be
+                // counted. The EOD transaction below is recorded with SkipDrawerOpen
+                // so the drawer is opened exactly once for the whole operation.
+                // Credentials were verified above with authenticate (username AND
+                // password); open_drawer_only authenticates by password alone, so it
+                // follows that check rather than replacing it.
+                try
+                {
+                    var openRequest = new ServerRequest
+                    {
+                        Command = "open_drawer_only",
+                        Password = authDialog.Password,
+                        Username = authDialog.Username
+                    };
+
+                    var openResponse = await _networkClient!.SendRequestAsync(openRequest);
+
+                    if (openResponse?.Status != "success")
+                    {
+                        MessageBox.Show(
+                            openResponse?.Message ?? "Failed to open drawer",
+                            "Error",
+                            MessageBoxButtons.OK,
+                            MessageBoxIcon.Error);
+                        return;
+                    }
+
+                    _lastActionLabel.Text = $"✓ Drawer opened for EOD count at {DateTime.Now:h:mm:ss tt}";
+                    _lastActionLabel.ForeColor = Color.Green;
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show(
+                        $"Failed to open drawer: {ex.Message}",
+                        "Error",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Error);
+                    return;
+                }
+
                 // Get day summary from server
                 decimal expectedTotal = 0;
                 decimal safeDropTotal = 0;
@@ -1241,7 +1283,9 @@ namespace CashDrawer.Client
                         DocumentNumber = DateTime.Today.ToString("yyyyMMdd"),
                         Total = eodForm.ActualTotal,
                         AmountIn = 0,
-                        AmountOut = 0
+                        AmountOut = 0,
+                        // Already opened above for the count - don't pop it again.
+                        SkipDrawerOpen = true
                     };
                     
                     var eodResponse = await _networkClient!.SendRequestAsync(eodRequest);

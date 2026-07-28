@@ -296,11 +296,16 @@ namespace CashDrawer.Server.Services
                 return new ServerResponse { Status = "error", Message = "Invalid password" };
             }
 
-            // Open drawer
-            if (!_serialPortService.OpenDrawer())
+            // Open drawer, unless the caller already opened it for this operation -
+            // BOD and EOD open it up front so the cash can be counted, and this call
+            // is only here to record the count.
+            if (!request.SkipDrawerOpen)
             {
-                _logger.LogWarning($"Drawer open failed for user '{user.Username}' - relay/COM port error");
-                return new ServerResponse { Status = "error", Message = "Failed to open drawer" };
+                if (!_serialPortService.OpenDrawer())
+                {
+                    _logger.LogWarning($"Drawer open failed for user '{user.Username}' - relay/COM port error");
+                    return new ServerResponse { Status = "error", Message = "Failed to open drawer" };
+                }
             }
 
             // Log transaction. Adopting the client's idempotency key as the
