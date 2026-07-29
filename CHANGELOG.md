@@ -5,6 +5,36 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.11.8] - 2026-07-29
+
+### Added
+- **A failed relay no longer costs the sale** - Both servers are wired to the same
+  till, so if one server's relay won't fire the client now opens the drawer through
+  the other server's relay instead of refusing the transaction and making the
+  cashier key it in again. Applies to sales and to the BOD/EOD count as well. The
+  client stays on the working relay for the rest of the session so the next sale
+  doesn't repeat the detour; this is not persisted, so the next launch returns to
+  the configured primary and a relay fixed overnight is used again.
+
+  This is safe because a relay failure records nothing: the server returns before
+  logging, so the transaction is written only by the relay that actually fired.
+  The original request - including its idempotency key - is reused, so in the case
+  where the first server did open and log but its reply was lost, the second server
+  collapses onto that same row rather than adding another.
+
+  Failover is driven by a new machine-readable `ErrorCode` on the response, not by
+  matching message text, and it triggers **only** on a relay failure. Any other
+  failure (a rejected password, say) is returned as-is, and a response with no
+  error code - which is what a pre-3.11.8 server sends - is never retried
+  elsewhere. **Needs the servers on 3.11.8** to emit the code.
+
+### Fixed
+- **The relay now retries before giving up** - `OpenDrawer` caught the fault,
+  logged it and returned, so a single transient COM port error refused the sale
+  outright. The port is now closed and reopened and the pulse retried once, which
+  clears the "semaphore timeout period has expired" fault these USB serial adapters
+  produce.
+
 ## [3.11.7] - 2026-07-28
 
 ### Added

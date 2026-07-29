@@ -25,6 +25,12 @@ namespace CashDrawer.Client
 
         public bool IsConnected => _tcpClient?.Connected ?? false;
 
+        /// <summary>Host this connection was opened to, or null if never connected.</summary>
+        public string? Host => _serverHost;
+
+        /// <summary>Port this connection was opened to.</summary>
+        public int Port => _serverPort;
+
         /// <summary>
         /// True while a request is on the wire. Callers that might otherwise tear
         /// this connection down (the connection monitor) check it first - disposing

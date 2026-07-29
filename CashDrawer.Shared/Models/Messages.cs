@@ -48,6 +48,22 @@ namespace CashDrawer.Shared.Models
     {
         public string Status { get; set; } = "error";
         public string Message { get; set; } = string.Empty;
+
+        /// <summary>
+        /// Machine-readable reason for a failure, so the client can react to a
+        /// specific one without matching on message text. Currently only
+        /// <see cref="DrawerOpenFailed"/>. Null from pre-3.11.8 servers, and the
+        /// client treats "no code" as "don't retry anywhere else" - a failure it
+        /// can't identify must never be retried blindly against another server.
+        /// </summary>
+        public string? ErrorCode { get; set; }
+
+        /// <summary>
+        /// The relay would not fire, so the drawer never opened and no transaction
+        /// was recorded. Safe for the client to retry on another server driving the
+        /// same till - and safe only because nothing was logged here.
+        /// </summary>
+        public const string DrawerOpenFailed = "DRAWER_OPEN_FAILED";
         public string? ServerID { get; set; }
         public string? Username { get; set; }
         public string? Name { get; set; }  // Full display name

@@ -677,6 +677,99 @@ namespace CashDrawer.Client
         }
 
         /// <summary>
+        /// Open the till using a different server's relay.
+        ///
+        /// Both servers are wired to the SAME physical drawer, so another server's
+        /// relay opens the same till. The relay is the only thing that opens it, so
+        /// a relay that won't fire must not cost the sale.
+        ///
+        /// This is safe only because a relay failure records nothing: the server
+        /// returns DRAWER_OPEN_FAILED before logging, so the transaction is written
+        /// exclusively by whichever relay actually fired. The original request -
+        /// including its ClientTransactionId - is reused, so in the case where the
+        /// first server did open and log but its reply was lost, the second server
+        /// collapses onto that same row instead of adding a second one.
+        ///
+        /// Returns the successful response, or null if no other relay worked.
+        /// </summary>
+        private async Task<ServerResponse?> TryOpenOnAnotherRelayAsync(ServerRequest request)
+        {
+            var tried = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var currentHost = _networkClient?.Host;
+            if (!string.IsNullOrWhiteSpace(currentHost)) tried.Add(currentHost!);
+
+            var candidates = new List<(string Host, int Port, string Label)>();
+
+            // Configured backup first - no broadcast needed.
+            var settings = LoadClientSettings();
+            if (settings?.BackupEnabled == true
+                && !string.IsNullOrWhiteSpace(settings.BackupHost)
+                && tried.Add(settings.BackupHost))
+            {
+                candidates.Add((settings.BackupHost, settings.BackupPort, "BACKUP"));
+            }
+
+            // Then anything else answering discovery (covers a backup that is
+            // configured to the same box as the primary, which is a no-op here).
+            try
+            {
+                using var disco = new NetworkClient();
+                foreach (var srv in await disco.DiscoverServersAsync())
+                {
+                    if (tried.Add(srv.Host))
+                        candidates.Add((srv.Host, srv.Port, srv.ServerID));
+                }
+            }
+            catch
+            {
+                // Discovery is best-effort; the configured backup may still work.
+            }
+
+            foreach (var (host, port, label) in candidates)
+            {
+                NetworkClient? alt = null;
+                try
+                {
+                    alt = new NetworkClient();
+                    alt.Connect(host, port);
+                    var response = await alt.SendRequestAsync(request);
+
+                    if (response?.Status == "success")
+                    {
+                        // Stay on the working relay for the rest of the shift so the
+                        // next sale doesn't repeat this detour. Deliberately not
+                        // persisted - the next launch returns to the configured
+                        // primary, so a relay fixed overnight is used again.
+                        var failed = _networkClient;
+                        _networkClient = alt;
+                        alt = null;
+                        if (failed != null && !failed.IsBusy) failed.Dispose();
+
+                        _connectedServerID = label;
+                        SetStatus($"● Connected ({label})", Color.DarkOrange,
+                            $"Server: {label} ({host}) - primary relay failed");
+                        return response;
+                    }
+
+                    // Anything other than a relay failure is a real answer (a bad
+                    // password, say). Retrying that elsewhere would only repeat it.
+                    if (response != null && response.ErrorCode != ServerResponse.DrawerOpenFailed)
+                        return response;
+                }
+                catch
+                {
+                    // Unreachable - try the next candidate.
+                }
+                finally
+                {
+                    alt?.Dispose();
+                }
+            }
+
+            return null;
+        }
+
+        /// <summary>
         /// Attempt to (re)establish a connection: primary -> backup -> rediscover.
         /// Returns true if connected. Safe to call repeatedly; guarded so only one
         /// attempt runs at a time.
@@ -1063,7 +1156,11 @@ namespace CashDrawer.Client
                     };
                     
                     var openResponse = await _networkClient!.SendRequestAsync(openRequest);
-                    
+
+                    // Same till, other relay - don't block the count over a relay.
+                    if (openResponse?.ErrorCode == ServerResponse.DrawerOpenFailed)
+                        openResponse = await TryOpenOnAnotherRelayAsync(openRequest) ?? openResponse;
+
                     if (openResponse?.Status != "success")
                     {
                         MessageBox.Show(
@@ -1208,6 +1305,10 @@ namespace CashDrawer.Client
                     };
 
                     var openResponse = await _networkClient!.SendRequestAsync(openRequest);
+
+                    // Same till, other relay - don't block the count over a relay.
+                    if (openResponse?.ErrorCode == ServerResponse.DrawerOpenFailed)
+                        openResponse = await TryOpenOnAnotherRelayAsync(openRequest) ?? openResponse;
 
                     if (openResponse?.Status != "success")
                     {
@@ -1616,6 +1717,16 @@ namespace CashDrawer.Client
                 // Send with full auto-recovery: live connection -> primary ->
                 // backup -> network rescan (handles a server that moved IPs).
                 ServerResponse? response = await SendWithFailoverAsync(request);
+
+                // The relay wouldn't fire, so nothing was recorded. Both servers
+                // drive the same till - use the other one's relay rather than
+                // losing the sale and making the cashier key it in again.
+                if (response?.ErrorCode == ServerResponse.DrawerOpenFailed)
+                {
+                    _lastActionLabel.Text = "Drawer relay did not respond - trying the other server...";
+                    _lastActionLabel.ForeColor = Color.DarkOrange;
+                    response = await TryOpenOnAnotherRelayAsync(request) ?? response;
+                }
 
                 if (response != null && response.Status == "success")
                 {

@@ -303,8 +303,16 @@ namespace CashDrawer.Server.Services
             {
                 if (!_serialPortService.OpenDrawer())
                 {
+                    // Nothing is logged here - the drawer never opened, so there is
+                    // no transaction. That is what makes it safe for the client to
+                    // retry against another server on the same till.
                     _logger.LogWarning($"Drawer open failed for user '{user.Username}' - relay/COM port error");
-                    return new ServerResponse { Status = "error", Message = "Failed to open drawer" };
+                    return new ServerResponse
+                    {
+                        Status = "error",
+                        Message = "Failed to open drawer",
+                        ErrorCode = ServerResponse.DrawerOpenFailed
+                    };
                 }
             }
 
@@ -394,7 +402,12 @@ namespace CashDrawer.Server.Services
             if (!_serialPortService.OpenDrawer())
             {
                 _logger.LogWarning($"Drawer open failed for user '{user.Username}' - relay/COM port error");
-                return new ServerResponse { Status = "error", Message = "Failed to open drawer" };
+                return new ServerResponse
+                {
+                    Status = "error",
+                    Message = "Failed to open drawer",
+                    ErrorCode = ServerResponse.DrawerOpenFailed
+                };
             }
 
             _logger.LogInformation($"Drawer opened (no transaction) by {user.Username}");

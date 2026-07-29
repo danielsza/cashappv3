@@ -81,18 +81,40 @@ namespace CashDrawer.Server.Services
         /// </summary>
         public bool OpenDrawer()
         {
+            // TEST MODE: Simulate drawer opening without actually triggering relay
+            if (_config.TestMode)
+            {
+                _logger.LogInformation("🧪 TEST MODE: Simulating drawer open (relay NOT triggered)");
+                var testDuration = (int)(_config.RelayDuration * 1000);
+                Thread.Sleep(testDuration); // Simulate the delay
+                _logger.LogInformation($"🧪 TEST MODE: Would use {_config.RelayPin} for {testDuration}ms on {_config.COMPort}");
+                return true;
+            }
+
+            // The relay is the only thing that opens this drawer, and a refused open
+            // costs the sale - nothing is logged unless the drawer actually opened.
+            // A USB serial adapter reporting "the semaphore timeout period has
+            // expired" has usually recovered once the port handle is closed and
+            // reopened, so try again before giving up and letting the caller fall
+            // back to another server's relay on the same till.
+            const int MaxAttempts = 2;
+            for (var attempt = 1; attempt <= MaxAttempts; attempt++)
+            {
+                if (TryPulseRelay(attempt, MaxAttempts))
+                    return true;
+
+                if (attempt < MaxAttempts)
+                    ResetPort();
+            }
+
+            return false;
+        }
+
+        /// <summary>A single attempt at pulsing the relay. Never throws.</summary>
+        private bool TryPulseRelay(int attempt, int maxAttempts)
+        {
             try
             {
-                // TEST MODE: Simulate drawer opening without actually triggering relay
-                if (_config.TestMode)
-                {
-                    _logger.LogInformation("🧪 TEST MODE: Simulating drawer open (relay NOT triggered)");
-                    var duration = (int)(_config.RelayDuration * 1000);
-                    Thread.Sleep(duration); // Simulate the delay
-                    _logger.LogInformation($"🧪 TEST MODE: Would use {_config.RelayPin} for {duration}ms on {_config.COMPort}");
-                    return true;
-                }
-
                 lock (_lock)
                 {
                     if (_serialPort?.IsOpen != true)
@@ -160,8 +182,34 @@ namespace CashDrawer.Server.Services
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Failed to open drawer");
+                _logger.LogError(ex,
+                    $"Failed to open drawer on {_config.COMPort} (attempt {attempt}/{maxAttempts})");
                 return false;
+            }
+        }
+
+        /// <summary>
+        /// Drop the port so the next attempt reopens it from scratch. A stalled USB
+        /// serial adapter generally needs the handle closed before it recovers.
+        /// </summary>
+        private void ResetPort()
+        {
+            try
+            {
+                lock (_lock)
+                {
+                    if (_serialPort != null)
+                    {
+                        try { if (_serialPort.IsOpen) _serialPort.Close(); } catch { }
+                        try { _serialPort.Dispose(); } catch { }
+                        _serialPort = null;
+                    }
+                }
+                _logger.LogWarning($"Reset {_config.COMPort} after a failed drawer open - retrying");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, $"Could not reset {_config.COMPort}");
             }
         }
 
