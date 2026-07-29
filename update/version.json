@@ -1,7 +1,7 @@
 {
-  "version": "3.11.7",
-  "url": "https://github.com/danielsza/cashappv3/releases/download/v3.11.7/CashDrawerSetup.msi",
-  "notes": "The client now saves a log when something goes wrong instead of closing silently, and an unexpected error no longer shuts the till down. Also fixes the underlying cause of transactions occasionally being recorded twice: a background connection check could interrupt a transaction that was still waiting on the drawer.",
+  "version": "3.11.8",
+  "url": "https://github.com/danielsza/cashappv3/releases/download/v3.11.8/CashDrawerSetup.msi",
+  "notes": "A cash drawer relay that does not respond no longer costs you the sale. The relay is now retried, and if it still will not fire the drawer is opened through the other server's relay instead of refusing the transaction. Requires the servers to be updated as well.",
   "mandatory": false,
-  "sha256": "fd9cad006334a02f0827abde408fda51942a69ea3e9a16d7a784f8cdfe28204c"
+  "sha256": "ec530bc703ec55afa251b0091f56bcbcac5847f2886f39d6e1d5c36f0879022d"
 }
