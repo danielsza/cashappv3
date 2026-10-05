@@ -1,7 +1,7 @@
 {
-  "version": "3.11.9",
-  "url": "https://github.com/danielsza/cashappv3/releases/download/v3.11.9/CashDrawerSetup.msi",
-  "notes": "Fixes the Settings window so the Save button is reachable on all register screens. Client-only update - servers do not need updating.",
+  "version": "3.11.10",
+  "url": "https://github.com/danielsza/cashappv3/releases/download/v3.11.10/CashDrawerSetup.msi",
+  "notes": "Settings window now shows the Save and Cancel buttons. Client-only update - servers do not need updating.",
   "mandatory": false,
-  "sha256": "f86b799addf058de959df6e2e99c5d26baea53b79b7424b9d6ea7d931982307c"
+  "sha256": "a94f595880f8232dc9cdf0fef28509077501b6118998dbb573db87941f3abc9c"
 }
