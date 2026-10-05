@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.11.9] - 2026-10-05
+
+### Fixed
+- **Settings dialog: Save button off-screen on small / high-DPI register screens** -
+  The Client Settings window was locked to its full height (`MinimumSize = this.Size`,
+  ~751px) with no clamp to the display, so on a shorter screen - or at 125-150% DPI -
+  the docked Save/Cancel bar at the bottom was pushed off the screen / behind the
+  taskbar. There was no reachable Save button, so server-address changes made in the
+  GUI were never written (editing the JSON by hand still worked). The dialog now
+  shrinks to fit the screen work area and re-centers on load; the settings area
+  scrolls (AutoScroll) so everything stays reachable. (Enter still saves.)
+
 ## [3.11.8] - 2026-07-29
 
 ### Added

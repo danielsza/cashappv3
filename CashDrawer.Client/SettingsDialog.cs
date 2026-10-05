@@ -53,7 +53,10 @@ namespace CashDrawer.Client
             this.ClientSize = new Size(910, 712);
             this.StartPosition = FormStartPosition.CenterParent;
             this.FormBorderStyle = FormBorderStyle.Sizable;
-            this.MinimumSize = this.Size;
+            // Allow the window to shrink so it fits on small / high-DPI register
+            // screens. The clamp to the actual screen happens in OnLoad; without a
+            // small minimum the bottom Save/Cancel bar could stay off-screen.
+            this.MinimumSize = new Size(560, 380);
 
             // Create main scrollable panel - FILL the space between top and bottom
             var mainPanel = new Panel
@@ -396,6 +399,33 @@ namespace CashDrawer.Client
 
             this.AcceptButton = _okButton;
             this.CancelButton = cancelButton;
+        }
+
+        protected override void OnLoad(EventArgs e)
+        {
+            base.OnLoad(e);
+
+            // Never let the dialog be taller/wider than the screen work area, or the
+            // docked bottom button bar (Save / Cancel) lands off-screen or behind the
+            // taskbar and can't be clicked. The main panel scrolls (AutoScroll), so
+            // every setting stays reachable even when the window is shortened.
+            var scr = Screen.FromControl(this) ?? Screen.PrimaryScreen;
+            var wa = scr != null ? scr.WorkingArea : new Rectangle(0, 0, 1024, 768);
+
+            int w = Math.Min(this.Width, wa.Width - 20);
+            int h = Math.Min(this.Height, wa.Height - 20);
+
+            if (w < this.MinimumSize.Width || h < this.MinimumSize.Height)
+                this.MinimumSize = new Size(Math.Min(this.MinimumSize.Width, w),
+                                            Math.Min(this.MinimumSize.Height, h));
+
+            if (w < this.Width || h < this.Height)
+                this.Size = new Size(w, h);
+
+            // Keep it fully on-screen, centered in the work area.
+            this.Location = new Point(
+                wa.X + Math.Max(0, (wa.Width - this.Width) / 2),
+                wa.Y + Math.Max(0, (wa.Height - this.Height) / 2));
         }
 
         // Read the configured auto-update manifest URL (client_settings.json), so the
