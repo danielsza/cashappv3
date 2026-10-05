@@ -1,7 +1,7 @@
 {
-  "version": "3.11.8",
-  "url": "https://github.com/danielsza/cashappv3/releases/download/v3.11.8/CashDrawerSetup.msi",
-  "notes": "A cash drawer relay that does not respond no longer costs you the sale. The relay is now retried, and if it still will not fire the drawer is opened through the other server's relay instead of refusing the transaction. Requires the servers to be updated as well.",
+  "version": "3.11.9",
+  "url": "https://github.com/danielsza/cashappv3/releases/download/v3.11.9/CashDrawerSetup.msi",
+  "notes": "Fixes the Settings window so the Save button is reachable on all register screens. Client-only update - servers do not need updating.",
   "mandatory": false,
-  "sha256": "ec530bc703ec55afa251b0091f56bcbcac5847f2886f39d6e1d5c36f0879022d"
+  "sha256": "f86b799addf058de959df6e2e99c5d26baea53b79b7424b9d6ea7d931982307c"
 }
