@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.11.10] - 2026-10-05
+
+### Fixed
+- **Settings dialog: Save and Cancel buttons missing (the real cause)** - 3.11.9 made
+  the window fit the screen, but Save/Cancel were still not shown. They were placed at
+  fixed x=720/810 with `Anchor = Right` while the bottom bar was still its default
+  200px wide, so WinForms kept them ~700px past the bar's right edge at every window
+  size and every DPI (Save rendered at x=1430 in a 910px bar). They are now
+  right-aligned from the bar's actual width on every layout. Verified by rendering the
+  real dialog at 560x380 through 1400x900: the old code fails at all five sizes and the
+  new code passes at all five.
+
 ## [3.11.9] - 2026-10-05
 
 ### Fixed

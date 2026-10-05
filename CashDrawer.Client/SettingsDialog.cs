@@ -332,7 +332,6 @@ namespace CashDrawer.Client
                 Text = "Save",
                 Location = new Point(720, 15),
                 Size = new Size(80, 40),
-                Anchor = AnchorStyles.Top | AnchorStyles.Right,
                 DialogResult = DialogResult.OK,
                 BackColor = Color.FromArgb(0, 120, 215),
                 ForeColor = Color.White,
@@ -346,7 +345,6 @@ namespace CashDrawer.Client
                 Text = "Cancel",
                 Location = new Point(810, 15),
                 Size = new Size(75, 40),
-                Anchor = AnchorStyles.Top | AnchorStyles.Right,
                 DialogResult = DialogResult.Cancel,
                 FlatStyle = FlatStyle.Flat,
                 Font = new Font("Segoe UI", 10)
@@ -354,6 +352,16 @@ namespace CashDrawer.Client
 
             buttonPanel.Controls.Add(_okButton);
             buttonPanel.Controls.Add(cancelButton);
+
+            // Right-align Save/Cancel from the panel's REAL width on every layout.
+            // Anchor=Right can't be used here: the panel is still its default 200px
+            // wide when the buttons are added, so WinForms records a negative right
+            // margin and the buttons end up far left, hidden behind Check for Updates.
+            buttonPanel.Layout += (s, e) =>
+            {
+                cancelButton.Left = buttonPanel.ClientSize.Width - 15 - cancelButton.Width;
+                _okButton.Left = cancelButton.Left - 10 - _okButton.Width;
+            };
 
             // Version display + manual "Check for Updates" (bottom-left of the bar).
             var versionLabel = new Label
